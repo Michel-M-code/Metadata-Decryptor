@@ -2,6 +2,7 @@
 import struct
 # Import argparse for handling command line arguments.
 import argparse
+from typing import Any
 
 # Set up argument parser
 parser = argparse.ArgumentParser()
@@ -12,48 +13,46 @@ parser.add_argument("-a", action="store_true", help="Automatic mode", required=F
 
 # Define positional arguments for the files
 parser.add_argument("--metadata", metavar="metadata", help="Metadata file")
-parser.add_argument("--reference_metadata", metavar="reference_metadata", help="Reference metadata file")
+parser.add_argument("--reference", metavar="reference", help="Reference metadata file")
+parser.add_argument("--output", metavar="output", help="Reference metadata file")
 
 args = parser.parse_args()
 
-is_parameterless = False
+use_default_files = (args.metadata, args.reference, args.output).count(None) == 3
 
 # Determine whether args are used and if automatic mode is selected
-if args.a and args.m:
-    raise ValueError("Cannot use both automatic (-a) and manual (-m) mode simultaneously.")
-elif args.a:
-    is_automatic = True
+auto = None
+if args.a:
+    print("Automatic mode selected.")
+    auto = True
 elif args.m:
-    is_automatic = False
-elif not args.a and not args.m:
-    if args.metadata is None and args.reference_metadata is not None:
-        raise FileNotFoundError(f"Metadata file '{args.metadata}' was not provided.")
-    elif args.metadata is not None and args.reference_metadata is None:
-        raise FileNotFoundError(f"Metadata file '{args.reference_metadata}' was not provided.")
-    elif args.metadata is None and args.reference_metadata is None:
-        is_parameterless = True
-    user_input = input("Enter A for Automatic mode or M for Manual mode: ").strip().upper()
-    if user_input == 'A':
-        is_automatic = True
-    elif user_input == 'M':
-        is_automatic = False
-    else:
-        print("Invalid input. Please enter A for Automatic mode or M for Manual mode.")
+    print("Manual mode selected.")
+    auto = False
+elif args.a and args.m:
+    raise ValueError("Cannot use both automatic (-a) and manual (-m) mode simultaneously.")
 
+# Select mode
+if auto is None:
+    user_input = input("Select mode. Automatic or Manual: ").strip().lower()
 
-# Open metadata file.
-if is_parameterless:
-    metadata = open("./global-metadata.dat", "rb")
-else:
-    metadata = open(args.metadata, "rb")
-# Open reference metadata file for comparisons.
-if is_parameterless:
-    reference_metadata = open("./reference-global-metadata.dat", "rb")
-else:
-    reference_metadata = open(args.reference_metadata, "rb")
-# Create decrypted metadata file.
-decrypted_metadata = open("./decrypted-global-metadata.dat", "wb")
+    while auto is None:
+        if user_input[0] == 'a':
+            auto = True
+            print("Automatic mode selected.")
+        elif user_input[0] == 'm':
+            print("Manual mode selected.")
+            auto = False
+        else:
+            print("Invalid input.")
+            user_input = input("Select mode. Automatic or Manual: ").strip().lower()
 
+# Open files
+print("No file arguments provided. Using default files." if use_default_files else "File arguments provided. Using provided files.")
+metadata = open("./global-metadata.dat" if not args.metadata else args.metadata, "rb")
+reference_metadata = open("./reference-global-metadata.dat" if not args.reference else args.reference, "rb")
+decrypted_metadata = open("./decrypted-global-metadata.dat" if not args.output else args.output, "wb")
+
+# Write first 12 bytes.
 decrypted_metadata.write(reference_metadata.read(12))
 # In format (actual, reference): (difference, zero_difference_count)
 pairs_to_differences = {}
@@ -128,50 +127,56 @@ for (actual, reference, margin), (difference, zero_difference) in sorted(pairs_t
                                                                          key=lambda x: (x[0][1] - x[1][1]), reverse=False):
 
     if actual not in values_found and reference not in values_found:
+
+        # Calculate size
         size = actual - last_actual_value_found
-        if not is_automatic:
-            print("═" * 150)
-            print(
-                f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
-            if bool(int(input("Valid? "))):
-                last_actual_value_found = actual
-                sizes.append(size)
-                values_found.append(actual)
-                values_found.append(reference)
-        if is_automatic:
+
+        if auto:
             valid = actual - reference - last_actual_value_found + last_reference_value_found < 1_000_000
             if valid:
+
                 print("═" * 150)
                 print(
                     f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
                 print("Valid: 1")
+
                 last_actual_value_found = actual
                 last_reference_value_found = reference
                 sizes.append(size)
+
+                # Write the value.
+                decrypted_metadata.write(b"\0\0\0\0")
+                decrypted_metadata.write(struct.pack("<I", actual))
+
                 values_found.append(actual)
                 values_found.append(reference)
-        else:
-            if is_automatic:
+
+            else:
                 print("═" * 150)
                 print(
                     f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
                 print("Valid: 0")
-            continue
+                continue
+
+        else:
+            print("═" * 150)
+            print(
+                f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
+
+            # Ask the user if the value is valid.
+            if bool(int(input("Valid? "))):
+                last_actual_value_found = actual
+                last_reference_value_found = reference
+                sizes.append(size)
+
+                # Write the value.
+                decrypted_metadata.write(b"\0\0\0\0")
+                decrypted_metadata.write(struct.pack("<I", actual))
+
+                values_found.append(actual)
+                values_found.append(reference)
     else:
         continue
-
-    found = False
-    for i in range(31):
-        reference_metadata.seek(8 + i * 8)
-        data = reference_metadata.read(4)
-        if data == struct.pack("<I", reference):
-            decrypted_metadata.seek(8 + i * 8)
-            decrypted_metadata.write(struct.pack("<I", actual))
-            found = True
-            break
-
-    if not found:
-        print(f"Could not find reference value: {reference}")
 
 # Fix last 2 offsets
 decrypted_metadata.seek(240)
