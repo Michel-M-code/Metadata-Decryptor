@@ -1,10 +1,56 @@
 # Import struct for handling little endian data.
 import struct
+# Import argparse for handling command line arguments.
+import argparse
+
+# Set up argument parser
+parser = argparse.ArgumentParser()
+
+# Set automatic (-a) and manual (-m) mode optional arguments
+parser.add_argument("-m", action="store_true", help="Manual mode", required=False)
+parser.add_argument("-a", action="store_true", help="Automatic mode", required=False)
+
+# Define positional arguments for the files
+parser.add_argument("--metadata", metavar="metadata", help="Metadata file")
+parser.add_argument("--reference_metadata", metavar="reference_metadata", help="Reference metadata file")
+
+args = parser.parse_args()
+
+is_parameterless = False
+
+# Determine whether args are used and if automatic mode is selected
+if args.a and args.m:
+    raise ValueError("Cannot use both automatic (-a) and manual (-m) mode simultaneously.")
+elif args.a:
+    is_automatic = True
+elif args.m:
+    is_automatic = False
+elif not args.a and not args.m:
+    if args.metadata is None and args.reference_metadata is not None:
+        raise FileNotFoundError(f"Metadata file '{args.metadata}' was not provided.")
+    elif args.metadata is not None and args.reference_metadata is None:
+        raise FileNotFoundError(f"Metadata file '{args.reference_metadata}' was not provided.")
+    elif args.metadata is None and args.reference_metadata is None:
+        is_parameterless = True
+    user_input = input("Enter A for Automatic mode or M for Manual mode: ").strip().upper()
+    if user_input == 'A':
+        is_automatic = True
+    elif user_input == 'M':
+        is_automatic = False
+    else:
+        print("Invalid input. Please enter A for Automatic mode or M for Manual mode.")
+
 
 # Open metadata file.
-metadata = open("./global-metadata.dat", "rb")
+if is_parameterless:
+    metadata = open("./global-metadata.dat", "rb")
+else:
+    metadata = open(args.metadata, "rb")
 # Open reference metadata file for comparisons.
-reference_metadata = open("./reference-global-metadata.dat", "rb")
+if is_parameterless:
+    reference_metadata = open("./reference-global-metadata.dat", "rb")
+else:
+    reference_metadata = open(args.reference_metadata, "rb")
 # Create decrypted metadata file.
 decrypted_metadata = open("./decrypted-global-metadata.dat", "wb")
 
@@ -75,6 +121,7 @@ print("Search done.")
 values_found = []
 sizes = []
 last_actual_value_found = 256
+last_reference_value_found = 256
 
 # Write the decrypted metadata
 for (actual, reference, margin), (difference, zero_difference) in sorted(pairs_to_differences.items(),
@@ -82,15 +129,33 @@ for (actual, reference, margin), (difference, zero_difference) in sorted(pairs_t
 
     if actual not in values_found and reference not in values_found:
         size = actual - last_actual_value_found
-        print("═" * 150)
-        print(
-            f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
-        if bool(int(input("Valid? "))):
-            last_actual_value_found = actual
-            sizes.append(size)
-            values_found.append(actual)
-            values_found.append(reference)
+        if not is_automatic:
+            print("═" * 150)
+            print(
+                f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
+            if bool(int(input("Valid? "))):
+                last_actual_value_found = actual
+                sizes.append(size)
+                values_found.append(actual)
+                values_found.append(reference)
+        if is_automatic:
+            valid = actual - reference - last_actual_value_found + last_reference_value_found < 1_000_000
+            if valid:
+                print("═" * 150)
+                print(
+                    f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
+                print("Valid: 1")
+                last_actual_value_found = actual
+                last_reference_value_found = reference
+                sizes.append(size)
+                values_found.append(actual)
+                values_found.append(reference)
         else:
+            if is_automatic:
+                print("═" * 150)
+                print(
+                    f"Actual: {actual:,} Reference: {reference:,}  Size: {size:,} | Margin: {margin:,} | Difference: {difference} Zero Difference: {zero_difference}")
+                print("Valid: 0")
             continue
     else:
         continue
