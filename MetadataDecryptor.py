@@ -2,7 +2,6 @@
 import struct
 # Import argparse for handling command line arguments.
 import argparse
-from typing import Any
 
 # Set up argument parser
 parser = argparse.ArgumentParser()
@@ -132,7 +131,7 @@ for (actual, reference, margin), (difference, zero_difference) in sorted(pairs_t
         size = actual - last_actual_value_found
 
         if auto:
-            valid = actual - reference - last_actual_value_found + last_reference_value_found < 1_000_000
+            valid = 1_000_000 > actual - reference - last_actual_value_found + last_reference_value_found > 0
             if valid:
 
                 print("═" * 150)
@@ -188,6 +187,7 @@ decrypted_metadata.write(struct.pack("<I", last_actual_value_found))
 # Write sizes
 for i in range(len(sizes)):
     decrypted_metadata.seek(12 + i * 8)
+    print(sizes[i])
     decrypted_metadata.write(struct.pack("<I", sizes[i]))
 
 # Fix last size
