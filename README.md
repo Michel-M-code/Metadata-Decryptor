@@ -1,70 +1,93 @@
 # Metadata-Decryptor
 
-This is a Python script designed to fix `global-metadata.dat` files that fail during metadata initialization or cannot be dumped. It's specifically useful for games that reorder values in the `global-metadata.dat` header, such as Standoff 2.
+This Python script decrypts and reorders the `global-metadata.dat` file for games that reorder metadata headers, like *Standoff 2*. The script provides both automatic and manual modes for validating reordered values by comparing an encrypted metadata file with a reference file.
 
-## Usage/Examples
+## Features
 
-### Prerequisites
+- **Automatic Mode**: Automatically validates reordered values based on calculated differences.
+- **Manual Mode**: Allows the user to manually verify each match to ensure accuracy.
+- **Error Reporting**: Detects and notifies if decryption fails due to incorrect files or mismatches.
 
-- Python 3.12
-- A metadata file with a reordered header that cannot be dumped
-- An older version of the metadata file that is correct and can be dumped
+## Prerequisites
 
-### Example
+- **Python 3.12**
+- **Required Python Modules**: Install `tqdm` and `colorama` by running:
+  ```sh
+  pip install tqdm colorama
+  ```
 
-#### Step 1: Getting the Files
+- **Input Files**:
+  - `global-metadata.dat` (latest, encrypted metadata file)
+  - `reference-global-metadata.dat` (older metadata file that can be dumped correctly)
 
-To use this script, you need two versions of the `global-metadata.dat` file:
-- **Latest version**: The file with the reordered header that you cannot dump.
-- **Older, working version**: A file from an earlier version of the game that can be dumped correctly.
+## Usage
 
-If you don't know which game version started shuffling the header values, you may need to try different versions of the metadata file. You can theoretically use metadata from another game, but it must be compatible, unencrypted, and not corrupted. 
+### Command-Line Arguments
 
-For this example, we'll use the game *Standoff 2*. At the time of writing, the latest version of *Standoff 2* is `0.29.1`, which cannot be dumped directly due to the reordered header. The older version `0.27.3` can be dumped and will serve as our reference.
+The script can be run with or without arguments. If arguments are not provided, the script will prompt you for file paths and mode selection.
 
-#### Step 2: Preparing the Files
+- `--metadata`: Path to the encrypted metadata file (e.g., `global-metadata.dat`).
+- `--reference`: Path to the reference metadata file (e.g., `reference-global-metadata.dat`).
+- `--output`: Path to save the decrypted metadata file.
+- `-a`: Automatic mode (validates reordered values automatically).
+- `-m`: Manual mode (user confirms each match interactively).
 
-1. **Download the required game versions**: You need both the latest version of the game and the older version.
-2. **Extract the `global-metadata.dat` files**: Once you've downloaded the required versions, extract the `global-metadata.dat` files from each version. 
-3. **Organize the files**: Place both metadata files in the same folder as the script. The latest version should remain named `global-metadata.dat`, and the older version should be renamed to `reference-global-metadata.dat`.
+### Examples
 
-#### Step 3: Running the Script
+#### Example 1: Automatic Mode
 
-Once your files are prepared, you can run the script. Here's how it works:
+To decrypt metadata automatically, use the following command:
+```sh
+python metadata_decryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -a
+```
 
-1. **Searching for Values**: The script will compare the values at various offsets in both metadata files. It checks for similarities and differences in the data, trying to match the reordered values in the latest file with their correct counterparts in the older reference file.
-2. **Displaying Potential Matches**: After processing, the script will output a list of potential matches that it found. For each match, you will be asked to confirm if it is valid. Here’s what the output might look like:
+#### Example 2: Manual Mode
 
-═════════════════════════════════════════════════════════════════ 
-Actual: 197,464 Reference: 197,728 Size: 197,208 | Margin: -264 | Difference: 51654 | Zero Difference: 1229
-Valid?
+If you want to review each match manually, use:
+```sh
+python metadata_decryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -m
+```
 
-**Explanation of the Output**:
+### Running Without Command-Line Arguments
 
-- **Actual**: This is the candidate value from the latest `global-metadata.dat` file that the script thinks is correct.
-- **Reference**: This is the corresponding value from the older `reference-global-metadata.dat` file that the script used for comparison.
-- **Size**: This is the size of the current section, calculated by subtracting the last confirmed offset from the current `Actual` value.
-- **Margin**: This shows the difference between the `Actual` value and the `Reference` value. In most cases, the margin should be small, but it can sometimes be negative, as shown here.
-- **Difference**: This is a measure of how different the bytes are at the `Actual` and `Reference` offsets. A lower difference indicates a closer match.
-- **Zero Difference**: This counts the number of times the byte difference between `Actual` and `Reference` is zero. A higher number here is a good indicator that the match is correct.
+If you run the script without specifying arguments, it will prompt you to input paths for the encrypted and reference metadata files, as well as the output file path. You will also be asked to choose between automatic and manual modes.
 
-3. **Validating the Match**: Based on the information provided, you will decide whether the match is valid or not. In this example, although the `Margin` is negative, the `Zero Difference` is high and the `Difference` is relatively low, indicating that this is likely a valid match. If you believe the match is correct, you would type `1` to confirm.
+### Detailed Explanation
 
-4. **Iterating Through the Matches**: The script will continue to search for matches, and you'll be prompted to confirm or reject each one until the header is fully reconstructed.
+#### Process Overview
 
-#### Step 4: Finalizing the Decryption
+1. **File Validation**: The script compares `global-metadata.dat` and `reference-global-metadata.dat`, calculating differences between values at specified offsets to detect and align reordered header values.
+2. **Modes**:
+   - **Automatic Mode**: The script automatically validates matches based on calculated differences and confidence metrics.
+   - **Manual Mode**: The script prompts the user to confirm each match, displaying detailed information for manual verification.
+   
+#### Output Information
 
-Once all matches are confirmed, the script will finalize the `decrypted-global-metadata.dat` file by fixing the last offsets and sizes. It will then write the remaining portion of the metadata file unchanged. Your `global-metadata.dat` file should now be repaired and ready for use.
+For each pair, the script outputs details like:
+- **Actual**: This is the candidate value from `global-metadata.dat` that will be written to the output file if confirmed.
+- **Reference**: This is the corresponding value from the older reference metadata file.
+- **Size**: The calculated size of the current section based on the last confirmed offset.
+- **Difference**: Byte-wise difference between the `Actual` and `Reference` values over a range.
+- **Zero Difference**: Count of exact matches (zero difference) between the `Actual` and `Reference` bytes in the comparison range.
+
+### Error Handling
+
+If the script detects too many mismatches (more than 30 in automatic mode), it will terminate and prompt you to:
+- Verify the paths and files specified.
+- Check that the `reference-global-metadata.dat` file is compatible and correctly decrypted.
+
+If decryption fails consistently, consider opening an issue on GitHub for support.
 
 ### Troubleshooting
 
-- **Inaccurate Matches**: If you find that the matches presented by the script seem inaccurate, double-check that your reference metadata file is correct and compatible with the latest version.
-- **Dump Failure**: If the decrypted metadata file still fails to dump, verify that the metadata was not encrypted in the first place and that you followed the steps correctly.
+- **Incorrect File Paths**: Ensure the file paths are correctly specified, or input them when prompted.
+- **Failed Decryption**: Verify that the reference metadata file is compatible with the latest version.
+- **Unsuccessful Dumping**: Confirm that the decrypted metadata file was generated correctly.
 
-### Contributing
+## Contributing
 
-Feel free to contribute to the project by submitting issues, suggesting improvements, or creating pull requests. Your feedback and contributions are welcome!
+Feel free to contribute by reporting issues, suggesting enhancements, or submitting pull requests. Contributions are welcome!
 
-### License
+## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
