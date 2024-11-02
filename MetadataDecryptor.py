@@ -1,13 +1,14 @@
 # Imports
-import struct
 import argparse
+import struct
 import math
+import sys
+import os
 from tqdm import tqdm
-import colorama
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
 # Init colorama
-colorama.init(autoreset=True)
+init(autoreset=False)
 
 # Set up argument parser
 parser = argparse.ArgumentParser()
@@ -22,8 +23,6 @@ parser.add_argument("--reference", metavar="reference", help="Reference metadata
 parser.add_argument("--output", metavar="output", help="Reference metadata file")
 
 args = parser.parse_args()
-
-use_default_files = (args.metadata, args.reference, args.output).count(None) == 3
 
 # Determine whether args are used and if automatic mode is selected
 auto = None
@@ -52,27 +51,51 @@ while auto is None:
 metadata_path = args.metadata
 reference_metadata_path = args.reference
 decrypted_metadata_path = args.output
-confirmed = 0
+confirmed = False
+def reset_paths():
+    global metadata_path, reference_metadata_path, decrypted_metadata_path
+    metadata_path = args.metadata
+    reference_metadata_path = args.reference
+    decrypted_metadata_path = args.output
 
-while not confirmed and not metadata_path and not reference_metadata_path and not decrypted_metadata_path:
-    if not metadata_path:
+while not confirmed or (not metadata_path and not reference_metadata_path and not decrypted_metadata_path):
+    reset_paths()
+    # Prompt the user to input missing file paths
+    if not metadata_path and not confirmed:
         metadata_path = input(f"{Fore.CYAN}Input encrypted metadata file path: {Style.RESET_ALL}")
-    if not reference_metadata_path:
+    if not reference_metadata_path and not confirmed:
         reference_metadata_path = input(f"{Fore.CYAN}Input reference metadata file path: {Style.RESET_ALL}")
-    if not decrypted_metadata_path:
-        decrypted_metadata_path = input(f"{Fore.CYAN}Input decrypted metadata save file path: {Style.RESET_ALL}")
+    if not decrypted_metadata_path and not confirmed:
+        decrypted_metadata_path = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}")
 
+    # Check if encrypted metadata is valid
+    if not os.path.isfile(metadata_path):
+        print(f"{Fore.YELLOW}Encrypted metadata file doesn't exist")
+        continue
+    elif open(metadata_path, "rb").read(4) != b'\xaf\x1b\xb1\xfa':
+        print(f"{Fore.YELLOW}Encrypted metadata file is not a valid metadata file.")
+        continue
+    
+    # Check if reference metadata is valid
+    if not os.path.isfile(reference_metadata_path):
+        print(f"{Fore.YELLOW}Reference metadata file doesn't exist")
+        continue
+    elif open(reference_metadata_path, "rb").read(4) != b'\xaf\x1b\xb1\xfa':
+        print(f"{Fore.YELLOW}Reference metadata file is not a valid metadata file.")
+        continue
 
     print(f"{Fore.CYAN}Using next files:")
-    print(f"    {Fore.CYAN}Encrypted - {Fore.LIGHTMAGENTA_EX}{Style.BRIGHT}{metadata_path}")
-    print(f"    {Fore.CYAN}Reference - {Fore.LIGHTMAGENTA_EX}{Style.BRIGHT}{reference_metadata_path}")
-    print(f"    {Fore.CYAN}Output - {Fore.LIGHTMAGENTA_EX}{Style.BRIGHT}{decrypted_metadata_path}")
+    print(f"    {Fore.CYAN}Encrypted - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + metadata_path + Style.RESET_ALL}")
+    print(f"    {Fore.CYAN}Reference - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + reference_metadata_path + Style.RESET_ALL}")
+    print(f"    {Fore.CYAN}Output - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + decrypted_metadata_path + Style.RESET_ALL}")
 
     while not confirmed:
         try:
             confirmed = bool(int(input(f"{Fore.CYAN}Correct? {Style.RESET_ALL}")))
+            if not confirmed: break
         except ValueError:
             print(f"{Fore.YELLOW}Enter 0 or 1")
+
 
 # Open files
 metadata = open(metadata_path, "rb")
@@ -113,27 +136,26 @@ def compare_bytes_at_offsets(actual_offset, reference_offset, length) -> tuple:
 
 # Parse every possible pair and check the difference.
 for i in tqdm(range(62 * 31), ncols = 100, colour = "green", unit = "pairs", desc="Searching... "):
-    # Second loop. Iterate over the rest of the values.
-    j = i % 30
-    i = i % 61
+    actual_position = i % 61
+    reference_position = i % 30
 
     # Go to positions
-    metadata.seek(8 + i * 4)
-    reference_metadata.seek(8 + j * 8)
+    metadata.seek(8 + actual_position * 4)
+    reference_metadata.seek(8 + reference_position * 8)
 
     # Actual candidate for checking.
     candidate_actual = metadata.read(4)
     # Reference candidate for checking.
     candidate_reference = reference_metadata.read(4)
 
-    candidate_actual_i = struct.unpack("<I", candidate_actual)[0]
-    candidate_reference_i = struct.unpack("<I", candidate_reference)[0]
+    candidate_actual_int = struct.unpack("<I", candidate_actual)[0]
+    candidate_reference_int = struct.unpack("<I", candidate_reference)[0]
     if (candidate_actual == b"\x00\x00\x00\x00" or candidate_reference == b"\x00\x00\x00\x00"
             or candidate_actual == b"\x00\x01\x00\x00" or candidate_reference == b"\x00\x01\x00\x00"
-            or candidate_actual_i <= lowest_reference_offset - 1024):
+            or candidate_actual_int <= lowest_reference_offset - 1024):
         continue
     
-    pairs_to_differences[(candidate_actual_i, candidate_reference_i)] = compare_bytes_at_offsets(candidate_actual_i, candidate_reference_i, 1024)
+    pairs_to_differences[(candidate_actual_int, candidate_reference_int)] = compare_bytes_at_offsets(candidate_actual_int, candidate_reference_int, 1024)
 
 
 values_found = []
@@ -195,36 +217,34 @@ if wrong_count > 30:
             "feel free to open an issue on my github: https://github.com/Michel-M-code/Metadata-Decryptor/issues/new")
     exit(-1)
 
-print(wrong_count)
+# Write sizes
+for i in tqdm(range(len(sizes)), ncols = 100, colour = "green", unit = "sizes", desc=f"Writing sizes..."):
+    decrypted_metadata.seek(12 + i * 8)
+    decrypted_metadata.write(struct.pack("<I", sizes[i]))
 
+# Fix last size
+print(f"{Fore.CYAN}Fixing the last size...")
+metadata.seek(0)
+decrypted_metadata.seek(252)
+decrypted_metadata.write(struct.pack("<I", len(metadata.read()) - last_actual_value_found))
+
+# Fix the last 2 offsets
 print(f"{Fore.CYAN}Fixing the last two offsets...")
-
-# Fix last 2 offsets
 decrypted_metadata.seek(240)
 decrypted_metadata.write(struct.pack("<I", last_actual_value_found))
 decrypted_metadata.seek(248)
 decrypted_metadata.write(struct.pack("<I", last_actual_value_found))
 
-print(f"{Fore.CYAN}Writing calculated sizes...")
-
-# Write sizes
-for i in range(len(sizes)):
-    decrypted_metadata.seek(12 + i * 8)
-    decrypted_metadata.write(struct.pack("<I", sizes[i]))
-
-print(f"{Fore.CYAN}Fixing the last size...")
-
-# Fix last size
-metadata.seek(0)
-decrypted_metadata.seek(252)
-decrypted_metadata.write(struct.pack("<I", len(metadata.read()) - last_actual_value_found))
-
+print("Writing the rest of the file...")
 # Write everything past the header unchanged.
 metadata.seek(256)
 decrypted_metadata.seek(256)
 decrypted_metadata.write(metadata.read())
 
-print(f"{Fore.LIGHTGREEN_EX + Style.BRIGHT}The script had successfully decrypted metadata file!\nDecrypted file saved to {Fore.CYAN}{decrypted_metadata.name}")
+print(f'{Fore.LIGHTGREEN_EX + Style.BRIGHT}Decrypted file saved to {Fore.CYAN + decrypted_metadata.name}\n'
+      f'{Fore.LIGHTGREEN_EX + Style.BRIGHT}The script had successfully decrypted metadata file!\n'
+      f'If the proceeding dump succeeds, if would be happy if you starred my github '
+      f'{Fore.BLUE}\033]8;;https://github.com/Michel-M-code/Metadata-Decryptor\33\\repo\033]8;;\033\\{Fore.LIGHTGREEN_EX + Style.BRIGHT}! (ctrl + click)')
 
 # Close files.
 metadata.close()
