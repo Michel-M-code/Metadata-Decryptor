@@ -62,11 +62,11 @@ while not confirmed or (not metadata_path and not reference_metadata_path and no
     reset_paths()
     # Prompt the user to input missing file paths
     if not metadata_path and not confirmed:
-        metadata_path = input(f"{Fore.CYAN}Input encrypted metadata file path: {Style.RESET_ALL}")
+        metadata_path = input(f"{Fore.CYAN}Input encrypted metadata file path: {Style.RESET_ALL}").replace("\"", "")
     if not reference_metadata_path and not confirmed:
-        reference_metadata_path = input(f"{Fore.CYAN}Input reference metadata file path: {Style.RESET_ALL}")
+        reference_metadata_path = input(f"{Fore.CYAN}Input reference metadata file path: {Style.RESET_ALL}").replace("\"", "")
     if not decrypted_metadata_path and not confirmed:
-        decrypted_metadata_path = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}")
+        decrypted_metadata_path = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}").replace("\"", "")
 
     # Check if encrypted metadata is valid
     if not os.path.isfile(metadata_path):
@@ -134,29 +134,33 @@ def compare_bytes_at_offsets(actual_offset, reference_offset, length) -> tuple:
 
     return difference, zero_difference_count
 
+bar = tqdm(total = 62 * 31, ncols = 100, colour = "green", unit = "pairs", desc="Searching... ")
+
 # Parse every possible pair and check the difference.
-for i in tqdm(range(62 * 31), ncols = 100, colour = "green", unit = "pairs", desc="Searching... "):
-    actual_position = i % 61
-    reference_position = i % 30
+for actual_position in range(62):
+    for reference_position in range(31):
+        
+        bar.update()
 
-    # Go to positions
-    metadata.seek(8 + actual_position * 4)
-    reference_metadata.seek(8 + reference_position * 8)
+        # Go to positions
+        metadata.seek(8 + actual_position * 4)
+        reference_metadata.seek(8 + reference_position * 8)
 
-    # Actual candidate for checking.
-    candidate_actual = metadata.read(4)
-    # Reference candidate for checking.
-    candidate_reference = reference_metadata.read(4)
+        # Actual candidate for checking.
+        candidate_actual = metadata.read(4)
+        # Reference candidate for checking.
+        candidate_reference = reference_metadata.read(4)
 
-    candidate_actual_int = struct.unpack("<I", candidate_actual)[0]
-    candidate_reference_int = struct.unpack("<I", candidate_reference)[0]
-    if (candidate_actual == b"\x00\x00\x00\x00" or candidate_reference == b"\x00\x00\x00\x00"
-            or candidate_actual == b"\x00\x01\x00\x00" or candidate_reference == b"\x00\x01\x00\x00"
-            or candidate_actual_int <= lowest_reference_offset - 1024):
-        continue
-    
-    pairs_to_differences[(candidate_actual_int, candidate_reference_int)] = compare_bytes_at_offsets(candidate_actual_int, candidate_reference_int, 1024)
+        candidate_actual_int = struct.unpack("<I", candidate_actual)[0]
+        candidate_reference_int = struct.unpack("<I", candidate_reference)[0]
+        if (candidate_actual == b"\x00\x00\x00\x00" or candidate_reference == b"\x00\x00\x00\x00"
+                or candidate_actual == b"\x00\x01\x00\x00" or candidate_reference == b"\x00\x01\x00\x00"
+                or candidate_actual_int <= lowest_reference_offset - 1024):
+            continue
+        
+        pairs_to_differences[(candidate_actual_int, candidate_reference_int)] = compare_bytes_at_offsets(candidate_actual_int, candidate_reference_int, 1024)
 
+bar.close()
 
 values_found = []
 sizes = []
