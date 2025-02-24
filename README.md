@@ -1,5 +1,8 @@
 # Metadata-Decryptor
 
+> [!NOTE]  
+> I am aware of the current issue with method dumping. Work is being done to resolve this issue in the near future.
+
 This Python script decrypts and reorders the `global-metadata.dat` file for games that reorder metadata headers, like *Standoff 2*. The script provides both automatic and manual modes for validating reordered values by comparing an encrypted metadata file with a reference file.
 
 ## Features
