@@ -38,14 +38,14 @@ The script can be run with or without arguments. If arguments are not provided, 
 
 To decrypt metadata automatically, use the following command:
 ```sh
-python metadata_decryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -a
+python MetadataDecryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -a
 ```
 
 #### Example 2: Manual Mode
 
 If you want to review each match manually, use:
 ```sh
-python metadata_decryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -m
+python MetadataDecryptor.py --metadata global-metadata.dat --reference reference-global-metadata.dat --output decrypted-global-metadata.dat -m
 ```
 
 ### Running Without Command-Line Arguments
