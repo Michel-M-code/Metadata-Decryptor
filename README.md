@@ -23,7 +23,8 @@ This Python script decrypts and reorders the `global-metadata.dat` file for game
 ## Usage
 
 > [!IMPORTANT]  
-> If the decryption fails for new versions of Standoff 2, try to use the decrypted metadata from the version before as a reference input file
+> If the decryption fails for new versions of Standoff 2, try to use the decrypted metadata from the version before as a reference input file.
+> After 0.33.0 `libunity.so` and `libil2cpp.so` are merged. To dump, when prompted in the dumper, just select `libunity.so` instead of `libil2cpp.so`.
 
 ### Command-Line Arguments
 
