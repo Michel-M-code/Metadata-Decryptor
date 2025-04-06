@@ -260,7 +260,7 @@ decrypted_metadata.write(metadata.read())
 
 print(f'{Fore.LIGHTGREEN_EX + Style.BRIGHT}Decrypted file saved to {Fore.CYAN + decrypted_metadata.name}\n'
       f'{Fore.LIGHTGREEN_EX + Style.BRIGHT}The script had successfully decrypted metadata file!\n'
-      f'If the proceeding dump succeeds, if would be happy if you starred my github '
+      f'If the proceeding dump succeeds, I would be happy if you starred my github '
       f'{Fore.BLUE}\033]8;;https://github.com/Michel-M-code/Metadata-Decryptor\33\\repo\033]8;;\033\\{Fore.LIGHTGREEN_EX + Style.BRIGHT}! (ctrl + click)')
 
 # Close files.
