@@ -37,7 +37,7 @@ while (not confirmed or (not libunity_path and not output_path)) and not args.s:
     output = args.output
     # Prompt the user to input missing file paths
     if not libunity_path and not confirmed:
-        metadata_path = input(f"{Fore.CYAN}Input libunity.so file path: {Style.RESET_ALL}").replace("\"", "")
+        libunity_path = input(f"{Fore.CYAN}Input libunity.so file path: {Style.RESET_ALL}").replace("\"", "")
     if not output and not confirmed:
         output = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}").replace(
             "\"", "")
