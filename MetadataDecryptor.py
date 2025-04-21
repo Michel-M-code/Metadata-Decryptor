@@ -1,6 +1,6 @@
 # Imports
 import argparse
-from html import entities
+from genericpath import isfile
 import os
 import struct
 
@@ -1098,9 +1098,12 @@ add_size_to_header(0)
 # Manually fix the last size beacuse implementing a proper fix would take another year
 reconstructed_data[252:256] = struct.pack("<I", len(metadata) - struct.unpack("<I", reconstructed_data[248:252])[0])
 
-print(f"{Fore.GREEN + Style.BRIGHT}SUCCESS!")
-print(f"{Fore.MAGENTA + Style.BRIGHT}Output written to {output_path}")
+print(f"{Fore.MAGENTA + Style.BRIGHT}Output written to {output_path}") 
+print(f"{Fore.GREEN}Successfully extracted and decrypted the metadata! I would be happy, if you starred my github "
+      f"{Fore.BLUE}\033]8;;https://github.com/Michel-M-code/Metadata-Decryptor\33\\repository\033]8;;\033\\{Fore.LIGHTGREEN_EX + Style.BRIGHT}! (ctrl + click)\n"
+      f"{Fore.CYAN}If anything goes wrong during the dump, feel free to open an issue on the said repository, this would help me to fix it quicker.{Style.RESET_ALL}")
 
 # Write reconstructed_data to output
+if os.path.isdir(output_path): output_path = output_path.rstrip("/").rstrip("\\") + "\\output-metadata.dat"
 with open(output_path, "wb") as f:
     f.write(reconstructed_data)
