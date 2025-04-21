@@ -54,7 +54,7 @@ while (not confirmed or (not libunity_path and not output_path)) and not args.s:
 
     print(f"{Fore.CYAN}Using next files:")
     print(f"    {Fore.CYAN}libunity.so - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + libunity_path + Style.RESET_ALL}")
-    print(f"    {Fore.CYAN}Output - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + output + Style.RESET_ALL}")
+    print(f"    {Fore.CYAN}Output - {Fore.LIGHTMAGENTA_EX + Style.BRIGHT + output_path + Style.RESET_ALL}")
 
     confirmed = input(f"{Fore.CYAN}Correct? {Style.RESET_ALL}").lower()[0] in ['1', 'y']
     if confirmed:
