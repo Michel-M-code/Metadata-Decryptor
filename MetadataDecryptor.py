@@ -34,12 +34,12 @@ output_path = args.output
 
 while (not confirmed or (not libunity_path and not output_path)) and not args.s:
     libunity_path = args.libunity
-    output = args.output
+    output_path = args.output
     # Prompt the user to input missing file paths
     if not libunity_path and not confirmed:
         libunity_path = input(f"{Fore.CYAN}Input libunity.so file path: {Style.RESET_ALL}").replace("\"", "")
-    if not output and not confirmed:
-        output = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}").replace(
+    if not output_path and not confirmed:
+        output_path = input(f"{Fore.CYAN}Input decrypted metadata save path: {Style.RESET_ALL}").replace(
             "\"", "")
 
     # Check if libunity.so file path is valid
