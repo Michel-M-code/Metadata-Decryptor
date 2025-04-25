@@ -17,10 +17,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-s", action="store_true", help="Skip confirmation prompt", required=False)
 parser.add_argument("-v", action="store_true", help="Verbose output", required=False)
 
-# Set automatic (-a) and manual (-m) mode optional arguments
-parser.add_argument("-m", action="store_true", help="Manual mode", required=False)
-parser.add_argument("-a", action="store_true", help="Automatic mode", required=False)
-
 # Define positional arguments for the files
 parser.add_argument("--libunity", metavar="libunity", help="libunity.so file")
 parser.add_argument("--output", metavar="output", help="Reference metadata file")
