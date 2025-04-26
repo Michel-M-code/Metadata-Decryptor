@@ -22,7 +22,7 @@ parser.add_argument("--output", metavar="output", help="Reference metadata file"
 
 args = parser.parse_args()
 
-confirmed = False
+confirmed = args.s
 
 libunity_path: str = args.libunity
 output_path: str = args.output
@@ -64,6 +64,7 @@ print(f"{Fore.CYAN}Starting search...")
 # Open the file
 libunity = open(libunity_path, "rb")
 elf = ELFFile(libunity)
+is64bit = elf.get_machine_arch() == "AArch64"
 
 # Precompute LOAD segments once
 load_segments = [
@@ -89,27 +90,37 @@ data_section = elf.get_section_by_name(".data")
 rodata_section = elf.get_section_by_name(".rodata")
 
 print(f"{Fore.CYAN}Collecting and mapping relocation data...")
+
 # Iterate over relocation sections
 relocations = []
 for section in elf.iter_sections():
     if section.header['sh_type'] not in ('SHT_REL', 'SHT_RELA'): continue
     print(f"{Fore.CYAN}Processing relocation section: {section.name}")
-    for rel in tqdm(section.iter_relocations(), colour="green", unit="relocations", total=section.header['sh_size'] // 24): # type: ignore
-        addr = rel['r_offset']
+    total = section.header['sh_size'] // (24 if is64bit else 8)
+    for relocation in tqdm(section.iter_relocations(), colour="green", unit="relocations", total=total): # type: ignore
+        addr = relocation['r_offset']
+
+        # Skip if not in the .data section
         if not data_section.header['sh_addr'] <= addr < data_section.header['sh_addr'] + data_section.header['sh_size']: # type: ignore
             continue
-        addend = rel['r_addend']
-        offset = map_vaddr_to_offset(addr)
-        if addend != 0: relocations.append((offset, addend))
+
+        if is64bit:
+            pointer = relocation['r_addend']
+        else:
+            offset = map_vaddr_to_offset(addr)
+            libunity.seek(offset)
+            pointer = struct.unpack("<I", libunity.read(4))[0]
+        
+        if pointer != 0: relocations.append(pointer)
 
 print(f"{Fore.CYAN}Iterating over relocations to find metadata pointer...")
 
 candidates = []
-for offset, addend in tqdm(relocations, colour="green", unit="relocations"):
-    libunity.seek(addend - 4)
+for addr in tqdm(relocations, colour="green", unit="relocations"):
+    libunity.seek(addr - 4)
     candidate = libunity.read(12)
     if candidate == b"\x81\x80\x80\x3B\0\0\0\0\0\0\0\0": # I hope these don't change
-        candidates.append(addend)
+        candidates.append(addr)
 
 # If more than 1 candidate is found, print a warning and continue
 if len(candidates) == 0:
@@ -228,6 +239,27 @@ def add_size_to_header(size):
     reconstructed_data[16+pos:20+pos] = struct.pack("<I", struct.unpack("<I", reconstructed_data[8+pos:12+pos])[0] + size)
 
 # And here's a shitload of heuristics to guess which offset is which field.
+def apply_heuristics(callback, prefer_the_lowest_size, struct_sig: str):
+    found = []
+    for offset, size in offsets_to_sizes:
+        data = metadata[offset:offset+size]
+
+        entries = []
+        valid = True
+
+        if struct_sig:
+            for i in range(0, len(data), 8):
+                try:
+                    fields = struct.unpack_from(struct_sig, data, i)
+                    entries.append(fields)
+                except struct.error:
+                    valid = False
+                    break
+        
+        if valid and callback(entries):
+            found.append((offset, size))
+    found.sort(key=lambda x: x[1])
+    return found[0] if prefer_the_lowest_size else found[-1]
 
 # Heuristic search for stringLiteral
 found = False
