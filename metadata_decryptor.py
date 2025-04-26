@@ -230,902 +230,319 @@ else:
 
 print(f"{Fore.CYAN}Starting reconstruction using heuristic search...")
 
-reconstructed_data = bytearray(b"\xAF\x1B\xB1\xFA\x1F\0\0\0\0\x01\00\00" + b"\0" * 244)
-pos = -8
+reconstructed_metadata = bytearray(b"\xAF\x1B\xB1\xFA\x1F\0\0\0\0\x01\00\00" + b"\0" * 244)
+
+position_in_header = 0
 def add_size_to_header(size):
-    global pos
-    pos += 8
-    reconstructed_data[12+pos:16+pos] = struct.pack("<I", size)
-    reconstructed_data[16+pos:20+pos] = struct.pack("<I", struct.unpack("<I", reconstructed_data[8+pos:12+pos])[0] + size)
+    # Write the size to the header, a mess I should rewrite somehow
+    global position_in_header
+    size_bytes = struct.pack("<I", size)
+    reconstructed_metadata[12 + position_in_header:16 + position_in_header] = size_bytes
+    new_size = struct.unpack("<I", reconstructed_metadata[8 + position_in_header:12 + position_in_header])[0] + size
+    reconstructed_metadata[16 + position_in_header:20 + position_in_header] = struct.pack("<I", new_size)
+    position_in_header += 8
 
 # And here's a shitload of heuristics to guess which offset is which field.
-def apply_heuristics(callback, prefer_the_lowest_size, struct_sig: str):
+
+# Main heuristic function
+def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_contains):
     found = []
     for offset, size in offsets_to_sizes:
         data = metadata[offset:offset+size]
+        
+        if add_if_contains and add_if_contains in data:
+            found.append((offset, size, data))
+            break
+        
+        if not struct_sig: continue
 
         entries = []
         valid = True
 
-        if struct_sig:
-            for i in range(0, len(data), 8):
-                try:
-                    fields = struct.unpack_from(struct_sig, data, i)
+        step = struct_sig[1:].count("I") * 4 + struct_sig[1:].count("H") * 2
+        for i in range(0, len(data), step):
+            try:
+                fields = struct.unpack_from(struct_sig, data, i)
+                if len(struct_sig[1:]) == 1:
+                    entries.append(fields[0])
+                else:
                     entries.append(fields)
-                except struct.error:
-                    valid = False
-                    break
+            except struct.error:
+                valid = False
+                break
         
-        if valid and callback(entries):
-            found.append((offset, size))
-    found.sort(key=lambda x: x[1])
-    return found[0] if prefer_the_lowest_size else found[-1]
-
-# Heuristic search for stringLiteral
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
+        if valid and callback and callback(entries):
+            found.append((offset, size, data))
+    if len(found) <= 0:
+        print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}{Style.RESET_ALL}")
+        exit(1)
     
-    entries = []
-    valid = True
+    found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
+    offsets_to_sizes.remove(found[0][:2])
 
-    for i in range(0, len(data), 8):
-        try:
-            entry_size, entry_index = struct.unpack_from("<II", data, i)
-            entries.append((entry_size, entry_index))
-        except struct.error:
-            valid = False
-            break
+    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]} with size {found[0][1]}. Adding to reconstructed metadata.")
 
-    if valid:
-        expected_index = entries[0][1]
-        for entry_size, entry_index in entries:
-            if entry_index != expected_index:
-                valid = False
-                break
-            expected_index += entry_size
+    add_size_to_header(found[0][1])
+    global reconstructed_metadata
+    reconstructed_metadata += found[0][2]
 
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found stringLiteral at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for stringLiteral")
+# Heuristic callbacks
 
-# Heuristic search for stringLiteralData (Not really a heuristic)
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
+# Heuristic callback for stringLiteral
+def stringLiteral_callback(entries):
+    expected_index = entries[0][1]
+    for entry_size, entry_index in entries:
+        if entry_index != expected_index:
+            return False
+        expected_index += entry_size
+    return True
 
-    if data[0:8] == b"\x00\x00\x00\x01\x09\x00\x00\x01":
-        found = True
-        print(f"{Fore.CYAN}Found stringLiteralData at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for stringLiteralData")
+# Heuristic callback for events
+def events_callback(entries):
+    wrong = 0
+    last_name_index = entries[0][0]
+    for name_index, _, add, remove, _, _ in entries:
+        if name_index < last_name_index:
+            wrong += 1
+        if wrong > 256: return False # Just to be sure
+        if add > 1024 or remove > 1024:
+            return False
+        last_name_index = name_index
+    return True
 
-# Heuristic search for string (Not really a heuristic again)
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
+# Heuristic callback for properties
+def properties_callback(entries):
+    for _, _, _, _, token in entries:
+        if token & 0xFF000000 != 0x17000000:
+            return False
+    return True
 
-    if data[0:15] == b"Assembly-CSharp":
-        found = True
-        print(f"{Fore.CYAN}Found string at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for string")
+# Heuristic callback for methods
+def methods_callback(entries):
+    for _, _, _, _, _, _, token, _, _, _, _ in entries:
+        if token & 0xFF000000 != 0x06000000:
+            return False
+    return True
 
-# Heuristic search for events
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    
-    for i in range(0, len(data), 24):
-        try:
-            name_index, _, add, remove, _, _ = struct.unpack_from("<IIIIII", data, i)
-            entries.append((name_index, add, remove))
-        except struct.error:
-            valid = False
-            break
+# Heuristic callback for methods
+def parameterDefaultValues_callback(entries):
+    last_parameter_index = entries[0][0]
+    for parameter_index, _, _ in entries:
+        if last_parameter_index > parameter_index:
+            return False
+        last_parameter_index = parameter_index
+    return True
 
-    if valid:
-        wrong = 0
-        last_name_index = entries[0][0]
-        last_add = entries[0][1]
-        last_remove = entries[0][2]
-        for name_index, add, remove in entries:
-            if name_index < last_name_index:
-                wrong += 1
-            if add > 1024 or remove > 1024:
-                valid = False
-                break
-            last_name_index = name_index
-        if wrong > 256: valid = False # Just to be sure
+# Heuristic callback for methods
+def fieldDefaultValues_callback(entries):
+    last_field_index = entries[0][0]
+    for field_index, _, _ in entries:
+        if last_field_index > field_index:
+            return False
+        last_field_index = field_index
+    return True
 
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found events at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for events")
+# Heuristic callback for methods
+def fieldAndParameterDefaultValues_callback(entries):
+    last_field_index = entries[0][0]
+    for field_index, _, _ in entries:
+        if last_field_index > field_index:
+            return False
+        last_field_index = field_index
+    return True
 
-# Heuristic search for properties
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 20):
-        try:
-            name_index, _, _, _, token = struct.unpack_from("<IIIII", data, i)
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
+def fieldMarshaledSizes_callback(entries):
+    last_field_index = entries[0][0]
+    for field_index, _, _ in entries:
+        if last_field_index > field_index:
+            return False
+        last_field_index = field_index
+    return True
 
-    if valid:
-        wrong = 0
-        counter = 0
-        last_token = entries[0]
-        for token in entries:
-            counter += 1
-            if token - 385_875_968 != counter: # 0x00000017
-                valid = False
-                break
-            # I hope that's enough
-            if counter >= 1024:
-                break
-            last_token = token
-        if wrong > 256: valid = False
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found properties at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for properties")
+def parameters_callback(entries):
+    for _, token, _ in entries:
+        if token & 0xFF000000 != 0x08000000:
+            return False
+    return True
 
-# Heuristic search for methods
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 36):
-        try:
-            _, _, _, _, _, _, token, _, _, _, _ = struct.unpack_from("<IIIIIIIHHHH", data, i)
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
+def fields_callback(entries):
+    for _, _, token in entries:
+        if token & 0xFF000000 != 0x04000000:
+            return False
+    return True
 
-    if valid:
-        wrong = 0
-        counter = 0
-        for token in entries:
-            if token & 100663296 != 100663296: # 0x00000017
-                valid = False
-                break
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found methods at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        reconstructed_data += data
-        offsets_to_sizes.remove((offset, size))
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for methods")
+def genericParameters_callback(entries):
+    last_owner_index = entries[0][0]
+    first_name_index = entries[0][1]
+    right_count = 0
+    for owner_index, name_index, _, _, _, _ in entries:
+        if owner_index <= last_owner_index:
+            right_count -= 1
+        else:
+            right_count += 1
+        if name_index == first_name_index:
+            right_count += 1
+        last_owner_index = owner_index
+        if right_count <= -16:
+            return False
+        if right_count >= 128:
+            return True
 
-# Heuristic search for parameterDefaultValues
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 12):
-        try:
-            parameter_index, _, _ = struct.unpack_from("<III", data, i)
-            entries.append(parameter_index)
-        except struct.error:
-            valid = False
-            break
+def genericParameterContraints_callback(entries):
+    for constraint in entries:
+        if 1024576 < constraint or constraint < 256:
+            return False
+    return True
 
-    if valid:
-        last_parameter_index = entries[0]
-        for parameter_index in entries:
-            if last_parameter_index > parameter_index: # 0x00000017
-                valid = False
-                break
-            last_parameter_index = parameter_index
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found parameterDefaultValues at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for parameterDefaultValues")
+def genericContainers_callback(entries):
+    for owner_index, type_argc, is_method, _ in entries:
+        if not (is_method == 0 or is_method == 1) or type_argc > 128:
+            return False
+    return True
 
-# Heuristic search for fieldDefaultValues (almost the same as previous, so the only thing we can do here is hope)
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 12):
-        try:
-            field_index, _, _ = struct.unpack_from("<III", data, i)
-            entries.append(field_index)
-        except struct.error:
-            valid = False
-            break
+def nestedTypes_callback(entries):
+    right_count, last_type_definition_index, attempts = 0, 0, 0
 
-    if valid:
-        last_field_index = entries[0]
-        for field_index in entries:
-            if last_field_index > field_index:
-                valid = False
-                break
-            last_field_index = field_index
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found fieldDefaultValues at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for fieldDefaultValues")
+    for type_definition_index in entries:
+        attempts += 1
+        if type_definition_index > last_type_definition_index:
+            right_count += 1
+        else:
+            right_count -= 1
+        if right_count > 256:
+            return True
+        if right_count < -4 or type_definition_index > 16777216 or attempts > 512:
+            return False
+        last_type_definition_index = type_definition_index
 
-# Heuristic search for fieldAndParameterDefaultValuesData (Not really a heuristic)
-# TODO: Make it not garbage
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    
-    if b"<color=#E9AF4D>{0}</color>" in data:
-        found = True
-        print(f"{Fore.CYAN}Found fieldAndParameterDefaultValues at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for fieldAndParameterDefaultValues")
+def interfaces_callback(entries):
+    for constraint in entries:
+        if 1024576 < constraint or constraint < 256:
+            return False
+    return True
 
-# Heuristic search for fieldMarshaledSizes (almost the same as previous two, so the only thing we can do here is hope)
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 12):
-        try:
-            field_index, type_index, _ = struct.unpack_from("<III", data, i)
-            entries.append((field_index, type_index))
-        except struct.error:
-            valid = False
-            break
+def vtableMethods_callback(entries):
+    for encoded_method_index in entries:
+        if encoded_method_index != 1 and encoded_method_index & 0xE0000000 == 0:
+            return False
+    return True
 
-    if valid:
-        last_field_index = entries[0][0]
-        for field_index, type_index in entries:
-            if last_field_index > field_index:
-                valid = False
-                break
-            last_field_index = field_index
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found fieldMarshaledSizes at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for fieldMarshaledSizes")
+def interfacesOffsets_callback(entries):
+    for interface_type_index, interface_offset in entries:
+        if interface_offset > 256 or 256 > interface_type_index or interface_type_index > 65535:
+            return False
+    return True
 
-# Heuristic search for parameters
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 12):
-        try:
-            _, token, _ = struct.unpack_from("<III", data, i)
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
+def typeDefinitions_callback(entries):
+    for entry in entries:
+        if entry[25] & 0xFF000000 != 0x02000000: 
+            return False
+    return True
 
-    if valid:
-        for token in entries:
-            if token & 134217728 != 134217728:
-                valid = False
-                break
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found parameters at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for parameters")
+def images_callback(entries):
+    entries = entries[:len(entries)-2]
+    for entry in entries:
+        if entry[7] != 1:
+            return False
+    return True
 
-# Heuristic search for fields
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 12):
-        try:
-            _, _, token = struct.unpack_from("<III", data, i)
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
+def assemblies_callback(entries):
+    for entry in entries:
+        token = entry[1]
+        if token & 0xFF000000 != 0x20000000:
+            return False
+    return True
 
-    if valid:
-        for token in entries:
-            if token & 67108864 != 67108864:
-                valid = False
-                break
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found fields at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for fields")
+def fieldRefs_callback(entries):
+    for type_index, field_index in entries:
+        if type_index < 256 or field_index > 2048:
+            return False
+    return True
 
-# Heuristic search for genericParameters
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 16):
-        try:
-            owner_index, name_index, _, _, _, _ = struct.unpack_from("<IIHHHH", data, i)
-            entries.append((owner_index, name_index))
-        except struct.error:
-            valid = False
-            break
+def referencedAssemblies_callback(entries):
+    mean_averege = sum(entries) / len(entries)
+    for assembly in entries:
+        if assembly > 256 or not 30 < mean_averege < 40:
+            return False
+    return True
 
-    if valid:
-        last_owner_index = entries[0][0]
-        first_name_index = entries[0][1]
-        right_count = 0
-        for owner_index, name_index in entries:
-            if owner_index <= last_owner_index:
-                right_count -= 1
-            else:
-                right_count += 1
-            if name_index == first_name_index:
-                right_count += 1
-            last_owner_index = owner_index
-            if right_count <= -16:
-                valid = False
-                break
-            if right_count >= 128:
-                break
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found genericParameters at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for genericParameters")
+def attributeDataRange_callback(entries):
+    right = 0
+    last_index = entries[0][1]
+    for token, index in entries:
+        if token & 0xFF000000 == 0:
+            right -= 10
+        else:
+            right += 2
+        if index < last_index:
+            right -= 2
+        else:
+            right += 1
+        if right > 2048:
+            return True
+        elif right < -16:
+            return False
+    return True
 
-# Heuristic search for genericParameterContraints
-found = False
-offset_size_data: list[tuple[int, int, bytes]] = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            constraint = struct.unpack_from("<I", data, i)[0]
-            entries.append(constraint)
-        except struct.error:
-            valid = False
-            break
+def unresolvedIndirectCallParameterTypes_callback(entries):
+    for parameter in entries:
+        if parameter < 256 or parameter > 70000:
+            return False
+    return True
 
-    if valid:
-        for constraint in entries:
-            # Bad
-            if 1024576 < constraint or constraint < 256:
-                valid = False
-                break
-    if valid:
-        offset_size_data.append((offset, size, data))
-if len(offset_size_data) > 0:
-    offset, size, data = sorted(offset_size_data, key=lambda item: item[1])[0]
-    print(f"{Fore.CYAN}Found genericParameterContraints at offset {offset} with size {size}. Adding to reconstructed_data.")
-    add_size_to_header(size)
-    offsets_to_sizes.remove((offset, size))
-    reconstructed_data += data
-else:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for genericParameterContraints")
+def unresolvedIndirectCallParameterTypeRanges_callback(entries):
+    expected_start = entries[0][0]
+    for start, length in entries:
+        if start != expected_start:
+            return False
+        expected_start += length
+    return True
 
-# Heuristic search for genericContainers
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 16):
-        try:
-            owner_index, type_argc, is_method, _, = struct.unpack_from("<IIII", data, i)
-            entries.append((owner_index, type_argc, is_method))
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for owner_index, type_argc, is_method in entries:
-            if not (is_method == 0 or is_method == 1) or type_argc > 128:
-                valid = False
-                break
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found genericContainers at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for genericContainers")
-
-# Heuristic search for nestedTypes
-found = False
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            type_definition_index = struct.unpack_from("<I", data, i)[0]
-            entries.append(type_definition_index)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        right_count = 0
-        last_type_definition_index = 0
-        attempts = 0
-        exited_with_break = False
-        for type_definition_index in entries:
-            attempts += 1
-            if type_definition_index > last_type_definition_index:
-                right_count += 1
-            else:
-                right_count -= 1
-            # Might change this later
-            if right_count > 256:
-                break
-            if right_count < -4 or type_definition_index > 16777216 or attempts > 512:
-                valid = False
-                break
-            last_type_definition_index = type_definition_index
-    if valid:
-        found = True
-        print(f"{Fore.CYAN}Found nestedTypes at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for nestedTypes")
-
-# Heuristic search for interfaces
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            constraint = struct.unpack_from("<I", data, i)[0]
-            entries.append(constraint)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for constraint in entries:
-            # Bad, should rework sometime soon
-            if 1024576 < constraint or constraint < 256:
-                valid = False
-                break
-    if valid:
-        offset_size_data.append((offset, size, data))
-if len(offset_size_data) > 0:
-    offset, size, data = sorted(offset_size_data, key=lambda item: item[1], reverse=True)[0]
-    print(f"{Fore.CYAN}Found interfaces at offset {offset} with size {size}. Adding to reconstructed_data.")
-    add_size_to_header(size)
-    offsets_to_sizes.remove((offset, size))
-    reconstructed_data += data
-else:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for interfaces")
-
-# Heuristic search for vtableMethods (This is the only one that worked first try lmao)
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            constraint = struct.unpack_from("<I", data, i)[0]
-            entries.append(constraint)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for encoded_method_index in entries:
-            if encoded_method_index != 1 and encoded_method_index & 0xE0000000 == 0:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found vtableMethods at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for vtableMethods")
-
-# Heuristic search for interfaceOffsets (This is the only one that worked first try lmao)
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 8):
-        try:
-            interface_type_index, interface_offset = struct.unpack_from("<II", data, i)
-            entries.append((interface_type_index, interface_offset))
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for interface_type_index, interface_offset in entries:
-            if interface_offset > 256 or 256 > interface_type_index or interface_type_index > 65535:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found interfaceOffsets at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for interfaceOffsets")
-
-# Heuristic search for typeDefinitions
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 88):
-        try:
-            token = struct.unpack_from("<III III I I IIIIIIII HHHHHHHH II", data, i)[25]
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for token in entries:
-            if token & 0x02000000 != 0x02000000:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found typeDefinitions at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for typeDefinitions")
-
-# Heuristic search for images
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 40):
-        try:
-            token = struct.unpack_from("<IIIIIIIIII", data, i)[7]
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        entries = entries[:len(entries)-2]
-        for token in entries:
-            if token != 1:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found images at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for images")
-
-# Heuristic search for assemblies
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 64):
-        try:
-            _, token = struct.unpack_from("<II", data, i)
-            entries.append(token)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        entries = entries[:len(entries)-2]
-        for token in entries:
-            if token & 0x20000000 != 0x20000000:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found assemblies at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for assemblies")
-
-# Heuristic search for fieldRefs
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 8):
-        try:
-            type_index, field_index = struct.unpack_from("<II", data, i)
-            entries.append((type_index, field_index))
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        last_type_index = entries[0][1]
-        for type_index, field_index in entries:
-            # Too vague
-            if type_index < 256 or field_index > 2048:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found fieldRefs at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for fieldRefs")
-
-# Heuristic search for referencedAssemblies
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            assembly = struct.unpack_from("<I", data, i)[0]
-            entries.append(assembly)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        mean_averege = sum(entries) / len(entries)
-        for assembly in entries:
-            # Maybe not the best approach
-            if assembly > 256 or not 30 < mean_averege < 40:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found referencedAssemblies at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for referencedAssemblies")
-
-# Heuristic search for attributeData
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-
-    if b"Use Axlebolt.Standoff.Main.Pass.RewardPreview" in data:
-        print(f"{Fore.CYAN}Found attributeData at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for attributeData")
-
-# Heuristic search for attributeDataRange
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 8):
-        try:
-            token, index = struct.unpack_from("<II", data, i)
-            entries.append((token, index))
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        right = 0
-        last_index = entries[0][1]
-        for token, index in entries:
-            if token & 0xFF000000 == 0:
-                right -= 10
-            else:
-                right += 2
-            if index < last_index:
-                right -= 2
-            else:
-                right += 1
-            if right > 2048:
-                break
-            elif right < -16:
-                valid = False
-                break
-    if valid:
-        print(f"{Fore.CYAN}Found attributeDataRange at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for attributeDataRange")
-
-# Heuristic search for unresolvedIndirectCallParameterTypes
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 4):
-        try:
-            parameter = struct.unpack_from("<I", data, i)[0]
-            entries.append(parameter)
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        for parameter in entries:
-            if parameter < 256 or parameter > 70000:
-                valid = False
-                break 
-    if valid:
-        print(f"{Fore.CYAN}Found unresolvedIndirectCallParameterTypes at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for unresolvedIndirectCallParameterTypes")
-
-# Heuristic search for unresolvedIndirectCallParameterTypeRanges
-found = False
-offset_size_data = []
-for offset, size in offsets_to_sizes:
-    data = metadata[offset:offset+size]
-    entries = []
-    valid = True
-    for i in range(0, len(data), 8):
-        try:
-            start, length = struct.unpack_from("<II", data, i)
-            entries.append((start, length))
-        except struct.error:
-            valid = False
-            break
-
-    if valid:
-        expected_start = entries[0][0]
-        for start, length in entries:
-            if start != expected_start:
-                valid = False
-                break
-            expected_start += length
-            
-    if valid:
-        print(f"{Fore.CYAN}Found unresolvedIndirectCallParameterTypeRanges at offset {offset} with size {size}. Adding to reconstructed_data.")
-        add_size_to_header(size)
-        offsets_to_sizes.remove((offset, size))
-        reconstructed_data += data
-        found = True
-        break
-if not found:
-    print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for unresolvedIndirectCallParameterTypeRanges")
+# Calls to the main apply_heuristic with appropriate callbacks
+apply_heuristic("stringLiteral", stringLiteral_callback, "<II", True, None)
+apply_heuristic("stringLiteralData", None, None, True, b"\x00\x00\x00\x01\x09\x00\x00\x01")
+apply_heuristic("string", None, None, True, b"Assembly-CSharp\0\0\0\0\0Assembl")
+apply_heuristic("events", events_callback, "<IIIIII", False, None)
+apply_heuristic("properties", properties_callback, "<IIIII", False, None)
+apply_heuristic("methods", methods_callback, "<IIIIIIIHHHH", False, None)
+apply_heuristic("parameterDefaultValues", parameterDefaultValues_callback, "<III", True, None)
+apply_heuristic("fieldDefaultValues", fieldDefaultValues_callback, "<III", True, None)
+apply_heuristic("fieldAndParameterDefaultValuesData", None, None, False, b"<color=#E9AF4D>{0}</color>")
+apply_heuristic("fieldMarshaledSizes", fieldMarshaledSizes_callback, "<III", True, None)
+apply_heuristic("parameters", parameters_callback, "<III", True, None)
+apply_heuristic("fields", fields_callback, "<III", True, None)
+apply_heuristic("genericParameters", genericParameters_callback, "<IIHHHH", False, None)
+apply_heuristic("genericParameterContraints", genericParameterContraints_callback, "<I", True, None)
+apply_heuristic("genericContainers", genericContainers_callback, "<IIII", False, None)
+apply_heuristic("nestedTypes", nestedTypes_callback, "<I", False, None)
+apply_heuristic("interfaces", interfaces_callback, "<I", False, None)
+apply_heuristic("vtableMethods", vtableMethods_callback, "<I", False, None)
+apply_heuristic("interfaceOffsets", interfacesOffsets_callback, "<II", False, None)
+apply_heuristic("typeDefinitions", typeDefinitions_callback, "<IIIIIIIIIIIIIIIIHHHHHHHHII", False, None)
+apply_heuristic("images", images_callback, "<IIIIIIIIII", False, None)
+apply_heuristic("assemblies", assemblies_callback, "<IIIIIIIIIIIIIIII", False, None)
+apply_heuristic("fieldRefs", fieldRefs_callback, "<II", False, None)
+apply_heuristic("referencedAssemblies", referencedAssemblies_callback, "<I", False, None)
+apply_heuristic("attributeData", None, None, False, b"Use Axlebolt.Standoff.Main.Pass.RewardPreview")
+apply_heuristic("attributeDataRange", attributeDataRange_callback, "<II", False, None)
+apply_heuristic("unresolvedIndirectCallParameterTypes", unresolvedIndirectCallParameterTypes_callback, "<I", False, None)
+apply_heuristic("unresolvedIndirectCallParameterTypeRanges", unresolvedIndirectCallParameterTypeRanges_callback, "<II", False, None)
 
 # Finally write the last two zero sizes
 add_size_to_header(0)
 add_size_to_header(0)
 
-# Manually fix the last size beacuse implementing a proper fix would take another year
-reconstructed_data[252:256] = struct.pack("<I", len(metadata) - struct.unpack("<I", reconstructed_data[248:252])[0])
+# Manually fix the last size beacuse implementing a proper fix is unnecessary
+reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
+                                  struct.unpack("<I", reconstructed_metadata[248:252])[0])
+
+# Write reconstructed_data to output
+if os.path.isdir(output_path): output_path = output_path.rstrip("/").rstrip("\\") + "\\output-metadata.dat"
+with open(output_path, "wb") as f:
+    f.write(reconstructed_metadata)
+    pass
 
 print(f"{Fore.MAGENTA + Style.BRIGHT}Output written to {output_path}") 
 print(f"{Fore.GREEN}Successfully extracted and decrypted the metadata! I would be happy, if you starred my github "
       f"{Fore.BLUE}\033]8;;https://github.com/Michel-M-code/Metadata-Decryptor\33\\repository\033]8;;\033\\{Fore.LIGHTGREEN_EX + Style.BRIGHT}! (ctrl + click)\n"
       f"{Fore.CYAN}If anything goes wrong during the dump, feel free to open an issue on the said repository, this would help me to fix it quicker.{Style.RESET_ALL}")
-
-# Write reconstructed_data to output
-if os.path.isdir(output_path): output_path = output_path.rstrip("/").rstrip("\\") + "\\output-metadata.dat"
-with open(output_path, "wb") as f:
-    f.write(reconstructed_data)
