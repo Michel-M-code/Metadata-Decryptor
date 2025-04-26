@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Python script to automatically extract and decrypt global-metadata.dat embedded in `libunity.so`. I'll clean the code later.
+A Python script to automatically extract and decrypt global-metadata.dat embedded in `libunity.so`. Made specifically for *Standoff 2*.
 
 ## Features
 
