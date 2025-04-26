@@ -1,6 +1,5 @@
 # Imports
 import argparse
-from genericpath import isfile
 import os
 import struct
 
@@ -25,12 +24,14 @@ args = parser.parse_args()
 
 confirmed = False
 
-libunity_path = args.libunity
-output_path = args.output
+libunity_path: str = args.libunity
+output_path: str = args.output
 
-while (not confirmed or (not libunity_path and not output_path)) and not args.s:
-    libunity_path = args.libunity
-    output_path = args.output
+print(f"{Fore.CYAN}NOTE: Current working directory: {os.getcwd()}")
+
+while (not confirmed or (not libunity_path and not output_path)):
+    # libunity_path = args.libunity
+    # output_path = args.output
     # Prompt the user to input missing file paths
     if not libunity_path and not confirmed:
         libunity_path = input(f"{Fore.CYAN}Input libunity.so file path: {Style.RESET_ALL}").replace("\"", "")
@@ -41,6 +42,7 @@ while (not confirmed or (not libunity_path and not output_path)) and not args.s:
     # Check if libunity.so file path is valid
     if not os.path.isfile(libunity_path):
         print(f"{Fore.YELLOW}libunity.so file doesn't exist")
+        libunity_path = ""
         continue
 
     elif open(libunity_path, "rb").read(4) != b'\x7fELF':
@@ -54,7 +56,7 @@ while (not confirmed or (not libunity_path and not output_path)) and not args.s:
 
     confirmed = input(f"{Fore.CYAN}Correct? {Style.RESET_ALL}").lower()[0] in ['1', 'y']
     if confirmed:
-        print(f"\n{Fore.CYAN}Starting...")
+        print(f"{Fore.CYAN}Starting...")
         break
 
 print(f"{Fore.CYAN}Starting search...")
@@ -79,7 +81,8 @@ def map_vaddr_to_offset(va):
         if start <= va < end:
             return va - start + offset
 
-    raise ValueError(f"VA {hex(va)} not found in any LOAD segment")
+    print(f"{Fore.RED}Error: Virtual address {va} not found in any LOAD segment.")
+    exit(-1)
 
 # Get sections
 data_section = elf.get_section_by_name(".data")
@@ -100,7 +103,7 @@ for section in elf.iter_sections():
         if addend != 0: relocations.append((offset, addend))
 
 print(f"{Fore.CYAN}Iterating over relocations to find metadata pointer...")
-# Iterate over relocations to find metadata pointer
+
 candidates = []
 for offset, addend in tqdm(relocations, colour="green", unit="relocations"):
     libunity.seek(addend - 4)
@@ -163,19 +166,10 @@ for possible_offset in offset_candidates:
     # Skip duplicates
     for offset, size in offsets_to_sizes:
         if offset == possible_offset:
-            # offsets_to_sizes.append((possible_offset, 0)) <--- Fuck you
             found = True
             break
     if found:
         continue
-
-    # if possible_offset == 14132440: breakpoint()
-
-    # In no unity metadata there is a size larger than half of it. (Commented out, because we still need to find the sizes.)
-    # if possible_offset > len(metadata) / 2:
-    #     offsets.append(possible_offset)
-    #     print(f"{Fore.CYAN}Offset {possible_offset} is larger than half of the metadata, adding it to the list of potential offsets.")
-    #     continue
 
     # Iterate in hopes of finding a size.
     for field in fields:
