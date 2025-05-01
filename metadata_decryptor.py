@@ -165,6 +165,8 @@ for field in fields:
     if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0":
         offset_candidates.append(field)
 
+# Remove duplicates
+offset_candidates = list(set(offset_candidates))
 offset_candidates.sort()
 
 print(f"{Fore.GREEN}Found {len(offset_candidates)} potential offsets.")
@@ -246,6 +248,8 @@ def add_size_to_header(size):
 
 # Main heuristic function
 def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_contains):
+    global reconstructed_metadata
+
     found = []
     for offset, size in offsets_to_sizes:
         data = metadata[offset:offset+size]
@@ -274,7 +278,11 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
         if valid and callback and callback(entries):
             found.append((offset, size, data))
     if len(found) <= 0:
-        print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}{Style.RESET_ALL}")
+        print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}")
+        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata."
+              f"You may try to use it during the dump, but it's really unlikely to succeed.{Style.RESET_ALL}")
+        with open("partially_decrypted_metadata.bin", "wb") as f:
+            f.write(reconstructed_metadata)
         exit(1)
     
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
@@ -283,7 +291,6 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
     print(f"{Fore.CYAN}Found {name} at offset {found[0][0]} with size {found[0][1]}. Adding to reconstructed metadata.")
 
     add_size_to_header(found[0][1])
-    global reconstructed_metadata
     reconstructed_metadata += found[0][2]
 
 # Heuristic callbacks
@@ -372,21 +379,12 @@ def fields_callback(entries):
     return True
 
 def genericParameters_callback(entries):
-    last_owner_index = entries[0][0]
-    first_name_index = entries[0][1]
-    right_count = 0
-    for owner_index, name_index, _, _, _, _ in entries:
-        if owner_index <= last_owner_index:
-            right_count -= 1
-        else:
-            right_count += 1
-        if name_index == first_name_index:
-            right_count += 1
-        last_owner_index = owner_index
-        if right_count <= -16:
-            return False
-        if right_count >= 128:
-            return True
+    expected_constraints_start = entries[0][2]
+    for _, name_index, constraints_start, constraints_count, _, _ in entries:
+        if constraints_start != 0 and expected_constraints_start != constraints_start or name_index < 256:
+           return False
+        expected_constraints_start += constraints_count
+    return True
 
 def genericParameterContraints_callback(entries):
     for constraint in entries:
@@ -395,7 +393,7 @@ def genericParameterContraints_callback(entries):
     return True
 
 def genericContainers_callback(entries):
-    for owner_index, type_argc, is_method, _ in entries:
+    for _, type_argc, is_method, _ in entries:
         if not (is_method == 0 or is_method == 1) or type_argc > 128:
             return False
     return True
@@ -411,7 +409,7 @@ def nestedTypes_callback(entries):
             right_count -= 1
         if right_count > 256:
             return True
-        if right_count < -4 or type_definition_index > 16777216 or attempts > 512:
+        if right_count < -4 or type_definition_index > 0x01000000 or attempts > 512:
             return False
         last_type_definition_index = type_definition_index
 
@@ -511,7 +509,7 @@ apply_heuristic("fieldAndParameterDefaultValuesData", None, None, False, b"<colo
 apply_heuristic("fieldMarshaledSizes", fieldMarshaledSizes_callback, "<III", True, None)
 apply_heuristic("parameters", parameters_callback, "<III", True, None)
 apply_heuristic("fields", fields_callback, "<III", True, None)
-apply_heuristic("genericParameters", genericParameters_callback, "<IIHHHH", False, None)
+apply_heuristic("genericParameters", genericParameters_callback, "<IIHHHH", True, None)
 apply_heuristic("genericParameterContraints", genericParameterContraints_callback, "<I", True, None)
 apply_heuristic("genericContainers", genericContainers_callback, "<IIII", False, None)
 apply_heuristic("nestedTypes", nestedTypes_callback, "<I", False, None)

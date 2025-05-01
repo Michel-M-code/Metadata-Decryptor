@@ -4,9 +4,6 @@
 
 A Python script to automatically extract and decrypt global-metadata.dat embedded in `libunity.so`. Made specifically for *Standoff 2*.
 
-> [!IMPORTANT]
-> I am working on resolving the current issue as soon as possibe
-
 ## Features
 
 - **Automatic extraction** of the embedded `global-metadata.dat` pointer from the ELF relocation table.
