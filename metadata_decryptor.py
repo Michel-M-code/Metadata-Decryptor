@@ -279,7 +279,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
             found.append((offset, size, data))
     if len(found) <= 0:
         print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}")
-        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata."
+        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata. "
               f"You may try to use it during the dump, but it's really unlikely to succeed.{Style.RESET_ALL}")
         with open("partially_decrypted_metadata.bin", "wb") as f:
             f.write(reconstructed_metadata)
@@ -295,7 +295,6 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
 
 # Heuristic callbacks
 
-# Heuristic callback for stringLiteral
 def stringLiteral_callback(entries):
     expected_index = entries[0][1]
     for entry_size, entry_index in entries:
@@ -304,7 +303,6 @@ def stringLiteral_callback(entries):
         expected_index += entry_size
     return True
 
-# Heuristic callback for events
 def events_callback(entries):
     wrong = 0
     last_name_index = entries[0][0]
@@ -317,21 +315,18 @@ def events_callback(entries):
         last_name_index = name_index
     return True
 
-# Heuristic callback for properties
 def properties_callback(entries):
     for _, _, _, _, token in entries:
         if token & 0xFF000000 != 0x17000000:
             return False
     return True
 
-# Heuristic callback for methods
 def methods_callback(entries):
     for _, _, _, _, _, _, token, _, _, _, _ in entries:
         if token & 0xFF000000 != 0x06000000:
             return False
     return True
 
-# Heuristic callback for methods
 def parameterDefaultValues_callback(entries):
     last_parameter_index = entries[0][0]
     for parameter_index, _, _ in entries:
@@ -340,7 +335,6 @@ def parameterDefaultValues_callback(entries):
         last_parameter_index = parameter_index
     return True
 
-# Heuristic callback for methods
 def fieldDefaultValues_callback(entries):
     last_field_index = entries[0][0]
     for field_index, _, _ in entries:
@@ -349,7 +343,6 @@ def fieldDefaultValues_callback(entries):
         last_field_index = field_index
     return True
 
-# Heuristic callback for methods
 def fieldAndParameterDefaultValues_callback(entries):
     last_field_index = entries[0][0]
     for field_index, _, _ in entries:
@@ -504,7 +497,7 @@ apply_heuristic("events", events_callback, "<IIIIII", False, None)
 apply_heuristic("properties", properties_callback, "<IIIII", False, None)
 apply_heuristic("methods", methods_callback, "<IIIIIIIHHHH", False, None)
 apply_heuristic("parameterDefaultValues", parameterDefaultValues_callback, "<III", True, None)
-apply_heuristic("fieldDefaultValues", fieldDefaultValues_callback, "<III", True, None)
+apply_heuristic("fieldDefaultValues", fieldDefaultValues_callback, "<III", False, None)
 apply_heuristic("fieldAndParameterDefaultValuesData", None, None, False, b"<color=#E9AF4D>{0}</color>")
 apply_heuristic("fieldMarshaledSizes", fieldMarshaledSizes_callback, "<III", True, None)
 apply_heuristic("parameters", parameters_callback, "<III", True, None)
