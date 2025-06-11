@@ -214,12 +214,18 @@ for possible_offset in offset_candidates:
             continue
         if found:
             break
-    if not found and (possible_offset > len(metadata) / 2 or sum(offsets_to_sizes[-1]) == possible_offset - 4):
-        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's a potential offset, precomputing size.")
-        next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
-        offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
-    elif not found:
-        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
+    if not found:
+        should_precompute = (
+            possible_offset == 260 or
+            possible_offset > len(metadata) / 2 
+            or offsets_to_sizes and sum(offsets_to_sizes[-1]) == possible_offset - 4
+        )
+        if should_precompute:
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it should be one, precomputing size.")
+            next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
+            offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
+        elif not found:
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
 
 # Sort offsets to sizes by key
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
