@@ -214,18 +214,12 @@ for possible_offset in offset_candidates:
             continue
         if found:
             break
-    if not found:
-        should_precompute = (
-            possible_offset == 260 or
-            possible_offset > len(metadata) / 2 
-            or offsets_to_sizes and sum(offsets_to_sizes[-1]) == possible_offset - 4
-        )
-        if should_precompute:
-            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it should be one, precomputing size.")
-            next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
-            offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
-        elif not found:
-            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
+    if not found and (possible_offset > len(metadata) / 2 or sum(offsets_to_sizes[-1]) == possible_offset - 4):
+        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one, precomputing size.")
+        next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
+        offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
+    elif not found:
+        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
 
 # Sort offsets to sizes by key
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
@@ -520,7 +514,7 @@ apply_heuristic("images", images_callback, "<IIIIIIIIII", False, None)
 apply_heuristic("assemblies", assemblies_callback, "<IIIIIIIIIIIIIIII", False, None)
 apply_heuristic("fieldRefs", fieldRefs_callback, "<II", False, None)
 apply_heuristic("referencedAssemblies", referencedAssemblies_callback, "<I", False, None)
-apply_heuristic("attributeData", None, None, False, b"Use Axlebolt.Standoff.Main.Pass.RewardPreview")
+apply_heuristic("attributeData", None, None, False, b"NewFragmentBox")
 apply_heuristic("attributeDataRange", attributeDataRange_callback, "<II", False, None)
 apply_heuristic("unresolvedIndirectCallParameterTypes", unresolvedIndirectCallParameterTypes_callback, "<I", False, None)
 apply_heuristic("unresolvedIndirectCallParameterTypeRanges", unresolvedIndirectCallParameterTypeRanges_callback, "<II", False, None)
