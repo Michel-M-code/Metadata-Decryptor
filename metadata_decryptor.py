@@ -148,8 +148,8 @@ else:
     print(f"{Fore.RED + Style.BRIGHT}Error: Failed find the metadata end marker in the metadata.{Style.RESET_ALL}")
 
 # Dump the intermediate metadata to a file for debugging purposes.
-with open("intermediate_metadata.bin", "wb") as f:
-    print(f"{Fore.CYAN}Dumping intermediate metadata to 'intermediate_metadata.bin' for debugging purposes.")
+with open("debug-metadata.bin", "wb") as f:
+    print(f"{Fore.CYAN}Dumping the debug metadata to 'debug-metadata.bin' for debugging purposes.")
     f.write(metadata)
 
 print(f"{Fore.CYAN}Starting decryption of the metadata...")
@@ -188,6 +188,11 @@ for possible_offset in offset_candidates:
     for field in fields:
         found_field = False
         if field != possible_offset and field != 0 and field < len(metadata) / 3:
+            if -4 <= field + possible_offset - len(metadata) <= 4:
+                print(f"{Fore.CYAN}Hit the last offset {possible_offset} with size {field}, adding it to the list of potential offsets.")
+                offsets_to_sizes.append((possible_offset, field))
+                found = True
+                break
             # Iterate again to maybe find a matching offset.
             for next_offset in offset_candidates:
                 for offset, size in offsets_to_sizes:
@@ -201,11 +206,6 @@ for possible_offset in offset_candidates:
                     print(f"{Fore.CYAN}Offset {possible_offset} + {field} (={possible_offset + field}) is close to offset {next_offset}, adding it to the list of potential offsets.")
                     found = True
                     break
-                elif -4 <= field + possible_offset - len(metadata) <= 4:
-                    print(f"{Fore.CYAN}Hit the last offset {possible_offset} with size {field}, adding it to the list of potential offsets.")
-                    offsets_to_sizes.append((possible_offset, field))
-                    found = True
-                    break
             if found:
                 break
         else:
@@ -214,12 +214,27 @@ for possible_offset in offset_candidates:
             continue
         if found:
             break
-    if not found and (possible_offset > len(metadata) / 2 or sum(offsets_to_sizes[-1]) == possible_offset - 4):
-        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one, precomputing size.")
-        next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
-        offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
-    elif not found:
-        print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
+    if not found:
+        should_precompute = (
+            possible_offset == 260 or
+            possible_offset > len(metadata) / 2 or
+            sum(offsets_to_sizes[-1]) == possible_offset - 4
+            )
+        if should_precompute:
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one, precomputing size...")
+
+            next_offset = None
+            try:
+                next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
+            except IndexError as _:
+                print(f"{Fore.YELLOW + Style.BRIGHT}IndexError, Last offset check failed! "
+                 "You are probably dumping the Huawei version of the game. Using failsafe.")
+
+                next_offset = len(metadata) + 4
+
+            offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
+        else:
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
 
 # Sort offsets to sizes by key
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
@@ -271,7 +286,9 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
                     entries.append(fields[0])
                 else:
                     entries.append(fields)
-            except struct.error:
+            except struct.error as e:
+                if name == "unresolvedIndirectCallParameterTypeRanges":
+                    print(e)
                 valid = False
                 break
         
@@ -374,7 +391,7 @@ def fields_callback(entries):
 def genericParameters_callback(entries):
     expected_constraints_start = entries[0][2]
     for _, name_index, constraints_start, constraints_count, _, _ in entries:
-        if constraints_start != 0 and expected_constraints_start != constraints_start or name_index < 256:
+        if constraints_start not in (0, expected_constraints_start) or name_index < 256:
            return False
         expected_constraints_start += constraints_count
     return True
@@ -528,7 +545,11 @@ reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) -
                                   struct.unpack("<I", reconstructed_metadata[248:252])[0])
 
 # Write reconstructed_data to output
-if os.path.isdir(output_path): output_path = output_path.rstrip("/").rstrip("\\") + "\\output-metadata.dat"
+if os.path.isdir(output_path):
+    if os.name == "nt":
+        output_path = output_path.rstrip("/").rstrip("\\") + "\\output-metadata.dat"
+    else:
+        output_path = output_path.rstrip("/").rstrip("\\") + "/output-metadata.dat"
 with open(output_path, "wb") as f:
     f.write(reconstructed_metadata)
     pass
