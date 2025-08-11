@@ -162,7 +162,7 @@ for i in range(8, 256, 4):
 # Find all possible offsets in the metadata.
 offset_candidates = []
 for field in fields:
-    if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0" and (field > 200_000 or field == 260):
+    if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0":
         offset_candidates.append(field)
 
 # Remove duplicates
@@ -176,17 +176,8 @@ offsets_to_sizes: list[tuple[int, int]] = []
 for possible_offset in offset_candidates:
     found = False
 
-    # Skip duplicates
-    for offset, size in offsets_to_sizes:
-        if offset == possible_offset:
-            found = True
-            break
-    if found:
-        continue
-
     # Iterate in hopes of finding a size.
-    # Note to myself: this might fuck up if it doesn't find two offsets in a row
-    for field in list(filter(lambda x: x not in offset_candidates, fields)):
+    for field in filter(lambda x: x not in offset_candidates, fields):
         found_field = False
         if field != possible_offset and field != 0 and field < len(metadata) / 3:
             if -4 <= field + possible_offset - len(metadata) <= 4:
@@ -218,7 +209,7 @@ for possible_offset in offset_candidates:
             break
     if not found:
         should_precompute = (
-            possible_offset == 260 or # Hua
+            possible_offset == 260 or # Huawei has some weird shit going on
             possible_offset > len(metadata) / 2 or
             sum(offsets_to_sizes[-1]) == possible_offset - 4
             )
