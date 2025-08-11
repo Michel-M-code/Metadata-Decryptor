@@ -159,10 +159,10 @@ fields = []
 for i in range(8, 256, 4):
     fields.append(struct.unpack("<I", metadata[i:i+4])[0])
 
-# Find all offsets in the metadata.
+# Find all possible offsets in the metadata.
 offset_candidates = []
 for field in fields:
-    if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0":
+    if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0" and (field > 200_000 or field == 260):
         offset_candidates.append(field)
 
 # Remove duplicates
@@ -185,7 +185,8 @@ for possible_offset in offset_candidates:
         continue
 
     # Iterate in hopes of finding a size.
-    for field in fields:
+    # Note to myself: this might fuck up if it doesn't find two offsets in a row
+    for field in list(filter(lambda x: x not in offset_candidates, fields)):
         found_field = False
         if field != possible_offset and field != 0 and field < len(metadata) / 3:
             if -4 <= field + possible_offset - len(metadata) <= 4:
@@ -193,6 +194,7 @@ for possible_offset in offset_candidates:
                 offsets_to_sizes.append((possible_offset, field))
                 found = True
                 break
+
             # Iterate again to maybe find a matching offset.
             for next_offset in offset_candidates:
                 for offset, size in offsets_to_sizes:
@@ -216,7 +218,7 @@ for possible_offset in offset_candidates:
             break
     if not found:
         should_precompute = (
-            possible_offset == 260 or
+            possible_offset == 260 or # Hua
             possible_offset > len(metadata) / 2 or
             sum(offsets_to_sizes[-1]) == possible_offset - 4
             )
@@ -226,7 +228,7 @@ for possible_offset in offset_candidates:
             next_offset = None
             try:
                 next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
-            except IndexError as _:
+            except IndexError:
                 print(f"{Fore.YELLOW + Style.BRIGHT}IndexError, Last offset check failed! "
                  "You are probably dumping the Huawei version of the game. Using failsafe.")
 
@@ -287,8 +289,6 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
                 else:
                     entries.append(fields)
             except struct.error as e:
-                if name == "unresolvedIndirectCallParameterTypeRanges":
-                    print(e)
                 valid = False
                 break
         
@@ -541,8 +541,8 @@ add_size_to_header(0)
 add_size_to_header(0)
 
 # Manually fix the last size beacuse implementing a proper fix is unnecessary
-reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
-                                  struct.unpack("<I", reconstructed_metadata[248:252])[0])
+# reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
+#                                   struct.unpack("<I", reconstructed_metadata[248:252])[0])
 
 # Write reconstructed_data to output
 if os.path.isdir(output_path):
