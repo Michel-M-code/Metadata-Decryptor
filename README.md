@@ -18,7 +18,7 @@ A Python script to automatically extract and decrypt global-metadata.dat embedde
 - Install required packages via pip:
 
   ```bash
-  pip install tqdm pyelftools
+  pip install tqdm pyelftools colorama
   ```
 
 ## Installation
