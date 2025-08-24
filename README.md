@@ -24,7 +24,7 @@ A Python script to automatically extract and decrypt global-metadata.dat embedde
 ## Installation
 
 1. Clone this repository (or download `metadata_decryptor.py`).
-2. Ensure Python 3.x is on your `PATH`.
+2. Ensure Python 3.x is on your `PATH` enviroment variable.
 3. Install dependencies as shown above.
 
 ## Usage
