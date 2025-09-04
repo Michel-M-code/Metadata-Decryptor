@@ -14,9 +14,10 @@ init(autoreset=False)
 parser = argparse.ArgumentParser()
 
 parser.add_argument("-s", action="store_true", help="Skip confirmation prompt", required=False)
-parser.add_argument("-v", action="store_true", help="Verbose output", required=False)
 
 # Define positional arguments for the files
+parser.add_argument("--exclude-offset-candidates", metavar="exclude_offset_candidates",
+                help="Exclude candidate offsets. In format `--exclude-offset-candidates 1,2,3`")
 parser.add_argument("--libunity", metavar="libunity", help="libunity.so file")
 parser.add_argument("--output", metavar="output", help="Reference metadata file")
 
@@ -24,8 +25,9 @@ args = parser.parse_args()
 
 confirmed = args.s
 
-libunity_path: str = args.libunity
-output_path: str = args.output
+exclude_offset_candidates = args.exclude_offset_candidates
+libunity_path = args.libunity
+output_path = args.output
 
 print(f"{Fore.CYAN}NOTE: Current working directory: {os.getcwd()}")
 
@@ -115,28 +117,28 @@ for section in elf.iter_sections():
 
 print(f"{Fore.CYAN}Iterating over relocations to find metadata pointer...")
 
-candidates = []
+pointer_candidates = []
 for addr in tqdm(relocations, colour="green", unit="relocations"):
     libunity.seek(addr - 4)
     candidate = libunity.read(12)
     if candidate == b"\x81\x80\x80\x3B\0\0\0\0\0\0\0\0": # I hope these don't change
-        candidates.append(addr)
+        pointer_candidates.append(addr)
 
 # If more than 1 candidate is found, print a warning and continue
-if len(candidates) == 0:
+if len(pointer_candidates) == 0:
     print(f"{Fore.RED + Style.BRIGHT}Error: No candidate found.{Style.RESET_ALL}")
     exit()
-elif len(candidates) == 1:
-    metadataptr = candidates[0]
+elif len(pointer_candidates) == 1:
+    metadataptr = pointer_candidates[0]
     print(f"{Fore.GREEN + Style.BRIGHT}Successfully found metadata pointer in the binary at {hex(metadataptr)}.{Style.RESET_ALL}")
 else:
     print(f"{Fore.YELLOW + Style.BRIGHT}Warning: More than one candidate found. Continuing with the first one.{Style.RESET_ALL}")
-    metadataptr = candidates[0]
+    metadataptr = pointer_candidates[0]
 
 # Extract the metadata bytes by reading from the binary until
 # the start of an arbitrary amount of zeros or the end of the file.
 libunity.seek(metadataptr)
-metadata = libunity.read(50_000_000) # Read 50 megabytes, because the metadata is usually smaller than that.
+metadata = libunity.read(30_000_000) # Read 30 megabytes (haven't seen any larger).
 index = metadata.find(b"\x00" * 256) # Find 256 bytes of zeros, which is usually the end of the metadata.
 if index != -1:
     # Align index to 4-byte boundary.
@@ -168,6 +170,11 @@ for field in fields:
 # Remove duplicates
 offset_candidates = list(set(offset_candidates))
 offset_candidates.sort()
+if exclude_offset_candidates:
+    for excluded_idx in exclude_offset_candidates.split(','):
+        todelete = offset_candidates[int(excluded_idx)]
+        print(f"{Fore.LIGHTCYAN_EX}Excluding offset {todelete}.")
+        del offset_candidates[int(excluded_idx)]
 
 print(f"{Fore.GREEN}Found {len(offset_candidates)} potential offsets.")
 
@@ -208,8 +215,9 @@ for possible_offset in offset_candidates:
         if found:
             break
     if not found:
+        is_260 = possible_offset == 260 # Huawei has some weird shit going on
         should_precompute = (
-            possible_offset == 260 or # Huawei has some weird shit going on
+            is_260 or
             possible_offset > len(metadata) / 2 or
             sum(offsets_to_sizes[-1]) == possible_offset - 4
             )
@@ -217,13 +225,15 @@ for possible_offset in offset_candidates:
             print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one, precomputing size...")
 
             next_offset = None
+
             try:
                 next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
             except IndexError:
                 print(f"{Fore.YELLOW + Style.BRIGHT}IndexError, Last offset check failed! "
-                 "You are probably dumping the Huawei version of the game. Using failsafe.")
+                    "You are probably dumping the Huawei version of the game. Using failsafe.")
 
                 next_offset = len(metadata) + 4
+
 
             offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
         else:
@@ -291,7 +301,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
               f"You may try to use it during the dump, but it's really unlikely to succeed.{Style.RESET_ALL}")
         with open("partially_decrypted_metadata.bin", "wb") as f:
             f.write(reconstructed_metadata)
-        exit(1)
+        f
     
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
     offsets_to_sizes.remove(found[0][:2])
