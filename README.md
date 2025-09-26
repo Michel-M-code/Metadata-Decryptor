@@ -29,9 +29,6 @@ A Python script to automatically extract and decrypt global-metadata.dat embedde
 
 ## Usage
 
-> [!NOTE]
-> Verbose (`-v`) flag is not yet implemented.
-
 Run the script against a `libunity.so` binary that contains an embedded `global-metadata.dat`:
 
 ```bash
