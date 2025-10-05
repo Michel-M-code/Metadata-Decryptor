@@ -145,7 +145,7 @@ if index != -1:
     index += (4 - index % 4) % 4
     metadata = metadata[:index]
     print(f"{Fore.GREEN}Successfully found metadata end marker.")
-    print(f"{Fore.GREEN}Metadata size: {len(metadata)} bytes.{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}Metadata size: {len(metadata)} bytes.{Style.RESET_ALL}")
 else:
     print(f"{Fore.RED + Style.BRIGHT}Error: Failed find the metadata end marker in the metadata.{Style.RESET_ALL}")
 
@@ -154,7 +154,7 @@ with open("debug-metadata.bin", "wb") as f:
     print(f"{Fore.CYAN}Dumping the debug metadata to 'debug-metadata.bin' for debugging purposes.")
     f.write(metadata)
 
-print(f"{Fore.CYAN}Starting decryption of the metadata...")
+print(f"{Fore.GREEN}Starting decryption of the metadata...")
 
 # Extract all fields except for magic and version.
 fields = []
@@ -170,21 +170,24 @@ for field in fields:
 # Remove duplicates
 offset_candidates = list(set(offset_candidates))
 offset_candidates.sort()
+
+# Exclude candidates based on user input.
 if exclude_offset_candidates:
     for excluded_idx in exclude_offset_candidates.split(','):
         todelete = offset_candidates[int(excluded_idx)]
         print(f"{Fore.LIGHTCYAN_EX}Excluding offset {todelete}.")
         del offset_candidates[int(excluded_idx)]
 
-print(f"{Fore.GREEN}Found {len(offset_candidates)} potential offsets.")
+print(f"{Fore.CYAN}Found {len(offset_candidates)} potential offsets.")
 
 # Attempt to filter offsets
 offsets_to_sizes: list[tuple[int, int]] = []
+only_sizes = list(filter(lambda x: x not in offset_candidates, fields))
 for possible_offset in offset_candidates:
     found = False
 
     # Iterate in hopes of finding a size.
-    for field in filter(lambda x: x not in offset_candidates, fields):
+    for field in only_sizes:
         found_field = False
         if field != possible_offset and field != 0 and field < len(metadata) / 3:
             if -4 <= field + possible_offset - len(metadata) <= 4:
@@ -214,6 +217,7 @@ for possible_offset in offset_candidates:
             continue
         if found:
             break
+    
     if not found:
         is_260 = possible_offset == 260 # Huawei has some weird shit going on
         should_precompute = (
@@ -222,10 +226,7 @@ for possible_offset in offset_candidates:
             sum(offsets_to_sizes[-1]) == possible_offset - 4
             )
         if should_precompute:
-            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one, precomputing size...")
-
             next_offset = None
-
             try:
                 next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
             except IndexError:
@@ -234,10 +235,12 @@ for possible_offset in offset_candidates:
 
                 next_offset = len(metadata) + 4
 
-
-            offsets_to_sizes.append((possible_offset, next_offset - possible_offset - 4))
+            size = next_offset - possible_offset - 4
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one with {size=}")
+            offsets_to_sizes.append((possible_offset, size))
         else:
-            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, skipping it.")
+            only_sizes.append(possible_offset)
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, and it's probably a size.")
 
 # Sort offsets to sizes by key
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
@@ -253,8 +256,8 @@ print(f"{Fore.CYAN}Starting reconstruction using heuristic search...")
 reconstructed_metadata = bytearray(b"\xAF\x1B\xB1\xFA\x1F\0\0\0\0\x01\00\00" + b"\0" * 244)
 
 position_in_header = 0
+# Write the size to the header, a mess I should rewrite somehow
 def add_size_to_header(size):
-    # Write the size to the header, a mess I should rewrite somehow
     global position_in_header
     size_bytes = struct.pack("<I", size)
     reconstructed_metadata[12 + position_in_header:16 + position_in_header] = size_bytes
@@ -279,7 +282,6 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
         if not struct_sig: continue
 
         entries = []
-        valid = True
 
         step = struct_sig[1:].count("I") * 4 + struct_sig[1:].count("H") * 2
         for i in range(0, len(data), step):
@@ -290,10 +292,11 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
                 else:
                     entries.append(fields)
             except struct.error as e:
-                valid = False
+                # Removed cuz heuristics will probably throw away incorrect offsets while
+                # some correct ones may get thrown away due to an offset filtering error
                 break
-        
-        if valid and callback and callback(entries):
+            
+        if callback and callback(entries):
             found.append((offset, size, data))
     if len(found) <= 0:
         print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}")
@@ -301,7 +304,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
               f"You may try to use it during the dump, but it's really unlikely to succeed.{Style.RESET_ALL}")
         with open("partially_decrypted_metadata.bin", "wb") as f:
             f.write(reconstructed_metadata)
-        f
+        exit(0)
     
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
     offsets_to_sizes.remove(found[0][:2])
