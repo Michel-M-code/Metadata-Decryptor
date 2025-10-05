@@ -291,19 +291,17 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
             found.append((offset, size, data))
     if len(found) <= 0:
         print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}")
-        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata. "
-              f"You may try to use it during the dump, but it's really unlikely to succeed.{Style.RESET_ALL}")
-        with open("partially_decrypted_metadata.bin", "wb") as f:
+        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata. {Style.RESET_ALL}")
+        with open("partially-decrypted-metadata.bin", "wb") as f:
             f.write(reconstructed_metadata)
         exit(0)
     
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
     offsets_to_sizes.remove(found[0][:2])
 
-    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]}. Adding to reconstructed metadata.")
+    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]}. Adding to reconstructed fields.")
 
     reconstructed_offsets.append(found[0][0])
-    reconstructed_metadata += found[0][2]
 
 # Heuristic callbacks
 
@@ -539,7 +537,7 @@ apply_heuristic("unresolvedIndirectCallParameterTypes", unresolvedIndirectCallPa
 apply_heuristic("unresolvedIndirectCallParameterTypeRanges", unresolvedIndirectCallParameterTypeRanges_callback, "<II", False, None)
 apply_heuristic("exportedTypeDefinitions", exportedTypeDefinitions_callback, "<I", False, None)
 
-print(f"{Fore.GREEN}Reconstructing the header...")
+print(f"{Fore.GREEN + Style.BRIGHT}Constructing the metadata...{Style.RESET_ALL}")
 
 position_in_header = 0
 def add_size_to_header(size):
@@ -558,18 +556,22 @@ for i in range(31):
         lookup_index = offset_lookup.index(offset)
         if lookup_index < 28:
             size = offset_lookup[lookup_index + 1] - offset - 4
-            print(f"{Fore.CYAN}Added offset {offset} with size {size} to the header")
+            print(f"{Fore.CYAN}Added offset {offset} with size {size} to the header.")
         else:
             size = len(metadata) - offset
         add_size_to_header(size)
+        # Add the data
+        reconstructed_metadata += metadata[offset:offset+size]
     elif i == 28 or i == 29:
         add_size_to_header(0)
-        print(f"{Fore.CYAN}Added a zero size for the {i}th entry")
+        print(f"{Fore.CYAN}Added a zero field for the {i}th entry.")
     elif i == 30:
         # Manually fix the last size beacuse implementing a proper fix is unnecessary
         reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
-                                        struct.unpack("<I", reconstructed_metadata[248:252])[0])             
-        print(f"{Fore.CYAN}Fixed the last size in the header")
+                                        struct.unpack("<I", reconstructed_metadata[248:252])[0])    
+        print(f"{Fore.CYAN}Fixed the last size in the header.")
+        # Add the data of the last field
+        reconstructed_metadata += metadata[offset:offset+size]
 
 
 # Write reconstructed_data to output
