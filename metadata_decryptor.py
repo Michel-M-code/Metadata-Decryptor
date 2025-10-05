@@ -254,16 +254,7 @@ else:
 print(f"{Fore.CYAN}Starting reconstruction using heuristic search...")
 
 reconstructed_metadata = bytearray(b"\xAF\x1B\xB1\xFA\x1F\0\0\0\0\x01\00\00" + b"\0" * 244)
-
-position_in_header = 0
-# Write the size to the header, a mess I should rewrite somehow
-def add_size_to_header(size):
-    global position_in_header
-    size_bytes = struct.pack("<I", size)
-    reconstructed_metadata[12 + position_in_header:16 + position_in_header] = size_bytes
-    new_size = struct.unpack("<I", reconstructed_metadata[8 + position_in_header:12 + position_in_header])[0] + size
-    reconstructed_metadata[16 + position_in_header:20 + position_in_header] = struct.pack("<I", new_size)
-    position_in_header += 8
+reconstructed_offsets = []
 
 # And here's a shitload of heuristics to guess which offset is which field.
 
@@ -309,9 +300,9 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
     offsets_to_sizes.remove(found[0][:2])
 
-    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]} with size {found[0][1]}. Adding to reconstructed metadata.")
+    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]}. Adding to reconstructed metadata.")
 
-    add_size_to_header(found[0][1])
+    reconstructed_offsets.append(found[0][0])
     reconstructed_metadata += found[0][2]
 
 # Heuristic callbacks
@@ -510,6 +501,13 @@ def unresolvedIndirectCallParameterTypeRanges_callback(entries):
         expected_start += length
     return True
 
+def exportedTypeDefinitions_callback(entries):
+    for entry in entries:
+        if entry < 4096 or entry > 32768:
+            return False
+    return True
+
+
 # Calls to the main apply_heuristic with appropriate callbacks
 apply_heuristic("stringLiteral", stringLiteral_callback, "<II", True, None)
 apply_heuristic("stringLiteralData", None, None, True, b"\x00\x00\x00\x01\x09\x00\x00\x01")
@@ -539,14 +537,40 @@ apply_heuristic("attributeData", None, None, False, b"NewFragmentBox")
 apply_heuristic("attributeDataRange", attributeDataRange_callback, "<II", False, None)
 apply_heuristic("unresolvedIndirectCallParameterTypes", unresolvedIndirectCallParameterTypes_callback, "<I", False, None)
 apply_heuristic("unresolvedIndirectCallParameterTypeRanges", unresolvedIndirectCallParameterTypeRanges_callback, "<II", False, None)
+apply_heuristic("exportedTypeDefinitions", exportedTypeDefinitions_callback, "<I", False, None)
 
-# Finally write the last two zero sizes
-add_size_to_header(0)
-add_size_to_header(0)
+print(f"{Fore.GREEN}Reconstructing the header...")
 
-# Manually fix the last size beacuse implementing a proper fix is unnecessary
-# reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
-#                                   struct.unpack("<I", reconstructed_metadata[248:252])[0])
+position_in_header = 0
+def add_size_to_header(size):
+    global position_in_header
+    size_bytes = struct.pack("<I", size)
+    reconstructed_metadata[12 + position_in_header:16 + position_in_header] = size_bytes
+    new_size = struct.unpack("<I", reconstructed_metadata[8 + position_in_header:12 + position_in_header])[0] + size
+    reconstructed_metadata[16 + position_in_header:20 + position_in_header] = struct.pack("<I", new_size)
+    position_in_header += 8
+
+offset_lookup = sorted(reconstructed_offsets)
+filtered_sizes = []
+for i in range(31):
+    if i < 28:
+        offset = reconstructed_offsets[i]
+        lookup_index = offset_lookup.index(offset)
+        if lookup_index < 28:
+            size = offset_lookup[lookup_index + 1] - offset - 4
+            print(f"{Fore.CYAN}Added offset {offset} with size {size} to the header")
+        else:
+            size = len(metadata) - offset
+        add_size_to_header(size)
+    elif i == 28 or i == 29:
+        add_size_to_header(0)
+        print(f"{Fore.CYAN}Added a zero size for the {i}th entry")
+    elif i == 30:
+        # Manually fix the last size beacuse implementing a proper fix is unnecessary
+        reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
+                                        struct.unpack("<I", reconstructed_metadata[248:252])[0])             
+        print(f"{Fore.CYAN}Fixed the last size in the header")
+
 
 # Write reconstructed_data to output
 if os.path.isdir(output_path):
