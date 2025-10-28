@@ -119,9 +119,9 @@ print(f"{Fore.CYAN}Iterating over relocations to find metadata pointer...")
 
 pointer_candidates = []
 for addr in tqdm(relocations, colour="green", unit="relocations"):
-    libunity.seek(addr - 4)
-    candidate = libunity.read(12)
-    if candidate == b"\x81\x80\x80\x3B\0\0\0\0\0\0\0\0": # I hope these don't change
+    libunity.seek(addr - 16)
+    candidate = libunity.read(16)
+    if candidate == b"\x02\0\0\0\x7C\0\00\x06\x0B\0\0\0\x02\0\0\0": # I REALLY hope these don't change
         pointer_candidates.append(addr)
 
 # If more than 1 candidate is found, print a warning and continue
@@ -139,7 +139,11 @@ else:
 # the start of an arbitrary amount of zeros or the end of the file.
 libunity.seek(metadataptr)
 metadata = libunity.read(30_000_000) # Read 30 megabytes (haven't seen any larger).
-index = metadata.find(b"\x00" * 256) # Find 256 bytes of zeros, which is usually the end of the metadata.
+index = metadata.find(b"\x15\x00\x0C\x0C\x10\x1B\x23\0\0\0\0\0\x28\0\x2C\x10") # Find a random ass marker that will prabably change each version
+
+# --------------------------------------------------- UNCOMMENT THE NEXT LINE IF YOURE DUMPING THE 32 BIT VERSION ---------------------------------------------------
+# index = metadata.find(b"\x00\x01\x01\x02\x01\x02\x02\x03")
+
 if index != -1:
     # Align index to 4-byte boundary.
     index += (4 - index % 4) % 4
@@ -156,19 +160,19 @@ with open("debug-metadata.bin", "wb") as f:
 
 print(f"{Fore.GREEN}Starting decryption of the metadata...")
 
-# Extract all fields except for magic and version.
+# Extract all fields except for magic and version. (Which have now been replaced with garbage values)
 fields = []
-for i in range(8, 256, 4):
-    fields.append(struct.unpack("<I", metadata[i:i+4])[0])
+for i in range(0, 256, 4):
+    value = struct.unpack("<I", metadata[i:i+4])[0]
+    if value < len(metadata) and value > 0:
+        fields.append(value)
 
-# Find all possible offsets in the metadata.
-offset_candidates = []
-for field in fields:
-    if field % 4 == 0 and metadata[field-4:field] == b"\0\0\0\0":
-        offset_candidates.append(field)
+# Try to narrow down the search by trying to find "data borders"
+# for field in fields:
 
-# Remove duplicates
-offset_candidates = list(set(offset_candidates))
+
+# Remove duplicates and sort
+offset_candidates = list(set(fields))
 offset_candidates.sort()
 
 # Exclude candidates based on user input.
@@ -181,7 +185,7 @@ if exclude_offset_candidates:
 print(f"{Fore.CYAN}Found {len(offset_candidates)} potential offsets.")
 
 # Attempt to filter offsets
-offsets_to_sizes: list[tuple[int, int]] = []
+offsets_to_sizes: list[tuple[int, int]] = [(0, 256)]
 only_sizes = list(filter(lambda x: x not in offset_candidates, fields))
 for possible_offset in offset_candidates:
     found = False
@@ -219,12 +223,15 @@ for possible_offset in offset_candidates:
             break
     
     if not found:
-        is_260 = possible_offset == 260 # Huawei has some weird shit going on
-        should_precompute = (
-            is_260 or
-            possible_offset > len(metadata) / 2 or
-            sum(offsets_to_sizes[-1]) == possible_offset - 4
-            )
+        is_256 = possible_offset == 256
+        try:
+            should_precompute = (
+                is_256 or
+                (possible_offset > len(metadata) / 2 and possible_offset < len(metadata)) or
+                sum(offsets_to_sizes[-1]) == possible_offset - 4
+                )
+        except:
+            break
         if should_precompute:
             next_offset = None
             try:
@@ -242,7 +249,12 @@ for possible_offset in offset_candidates:
             only_sizes.append(possible_offset)
             print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, and it's probably a size.")
 
-# Sort offsets to sizes by key
+# A temporary fix beacuse idk
+for offset, size in offsets_to_sizes:
+    if size == 25:
+        offsets_to_sizes.remove((offset, size))
+
+# Sort offsets to sizes by offset
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
 
 # If there are more or less than 29 offsets, something is wrong.
@@ -265,7 +277,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
     found = []
     for offset, size in offsets_to_sizes:
         data = metadata[offset:offset+size]
-        
+
         if add_if_contains and add_if_contains in data:
             found.append((offset, size, data))
             break
@@ -286,7 +298,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
                 # Removed cuz heuristics will probably throw away incorrect offsets while
                 # some correct ones may get thrown away due to an offset filtering error
                 break
-            
+
         if callback and callback(entries):
             found.append((offset, size, data))
     if len(found) <= 0:
@@ -346,14 +358,6 @@ def parameterDefaultValues_callback(entries):
     return True
 
 def fieldDefaultValues_callback(entries):
-    last_field_index = entries[0][0]
-    for field_index, _, _ in entries:
-        if last_field_index > field_index:
-            return False
-        last_field_index = field_index
-    return True
-
-def fieldAndParameterDefaultValues_callback(entries):
     last_field_index = entries[0][0]
     for field_index, _, _ in entries:
         if last_field_index > field_index:
@@ -470,6 +474,8 @@ def referencedAssemblies_callback(entries):
 def attributeDataRange_callback(entries):
     right = 0
     last_index = entries[0][1]
+    if last_index != 0:
+        return False
     for token, index in entries:
         if token & 0xFF000000 == 0:
             right -= 10
@@ -515,7 +521,7 @@ apply_heuristic("properties", properties_callback, "<IIIII", False, None)
 apply_heuristic("methods", methods_callback, "<IIIIIIIHHHH", False, None)
 apply_heuristic("parameterDefaultValues", parameterDefaultValues_callback, "<III", True, None)
 apply_heuristic("fieldDefaultValues", fieldDefaultValues_callback, "<III", False, None)
-apply_heuristic("fieldAndParameterDefaultValuesData", None, None, False, b"<color=#E9AF4D>{0}</color>")
+apply_heuristic("fieldAndParameterDefaultValuesData", None, None, False, b"\\Assets\\ThirdParty\\I2\\Localization\\Scripts\\Utils\\SetLanguage.cs")
 apply_heuristic("fieldMarshaledSizes", fieldMarshaledSizes_callback, "<III", True, None)
 apply_heuristic("parameters", parameters_callback, "<III", True, None)
 apply_heuristic("fields", fields_callback, "<III", True, None)
@@ -555,7 +561,7 @@ for i in range(31):
         offset = reconstructed_offsets[i]
         lookup_index = offset_lookup.index(offset)
         if lookup_index < 28:
-            size = offset_lookup[lookup_index + 1] - offset - 4
+            size = offset_lookup[lookup_index + 1] - offset
             print(f"{Fore.CYAN}Added offset {offset} with size {size} to the header.")
         else:
             size = len(metadata) - offset
