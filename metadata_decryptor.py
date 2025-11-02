@@ -1,5 +1,6 @@
 # Imports
 import argparse
+import collections
 import os
 import struct
 
@@ -135,14 +136,15 @@ else:
     print(f"{Fore.YELLOW + Style.BRIGHT}Warning: More than one candidate found. Continuing with the first one.{Style.RESET_ALL}")
     metadataptr = pointer_candidates[0]
 
-# Extract the metadata bytes by reading from the binary until
-# the start of an arbitrary amount of zeros or the end of the file.
+# Extract metadata from the binary file.
 libunity.seek(metadataptr)
 metadata = libunity.read(30_000_000) # Read 30 megabytes (haven't seen any larger).
-index = metadata.find(b"\x15\x00\x0C\x0C\x10\x1B\x23\0\0\0\0\0\x28\0\x2C\x10") # Find a random ass marker that will prabably change each version
 
-# --------------------------------------------------- UNCOMMENT THE NEXT LINE IF YOURE DUMPING THE 32 BIT VERSION ---------------------------------------------------
-# index = metadata.find(b"\x00\x01\x01\x02\x01\x02\x02\x03")
+# Try to find the end
+if is64bit:
+    index = metadata.find(b"\x15\x00\x0C\x0C\x10\x1B\x23\0\0\0\0\0\x28\0\x2C\x10") # Find a random ass marker that will prabably change each version
+else:
+    index = metadata.find(b"\x00\x01\x01\x02\x01\x02\x02\x03") # Find a random ass marker that will prabably change each version 32bit edition
 
 if index != -1:
     # Align index to 4-byte boundary.
@@ -152,6 +154,8 @@ if index != -1:
     print(f"{Fore.CYAN}Metadata size: {len(metadata)} bytes.{Style.RESET_ALL}")
 else:
     print(f"{Fore.RED + Style.BRIGHT}Error: Failed find the metadata end marker in the metadata.{Style.RESET_ALL}")
+    # We probably should exit because the last bit of the metadata will be corrupted
+    exit(1)
 
 # Dump the intermediate metadata to a file for debugging purposes.
 with open("debug-metadata.bin", "wb") as f:
@@ -164,28 +168,60 @@ print(f"{Fore.GREEN}Starting decryption of the metadata...")
 fields = []
 for i in range(0, 256, 4):
     value = struct.unpack("<I", metadata[i:i+4])[0]
-    if value < len(metadata) and value > 0:
+    if value > 0 and value < len(metadata):
         fields.append(value)
 
 # Try to narrow down the search by trying to find "data borders"
-# for field in fields:
+offset_candidates = []
 
+for field in fields:
+    if field < 8192:
+        if field == 256: # Make an exception for 256
+            offset_candidates.append(field)
+        continue
+    if field > len(metadata) / 3: # And an exception for big fields, that are probably offsets
+        offset_candidates.append(field)
+        continue
+    if field == 8595936: breakpoint()
+    behind_data = metadata[field-4096:field]
+    ahead_data = metadata[field:field+4096]
 
-# Remove duplicates and sort
-offset_candidates = list(set(fields))
+    # Count zeroes
+    zeroes_behid = behind_data.count(b'\0')
+    zeroes_ahead = ahead_data.count(b'\0')
+
+    # Find the "difference" between the two sides
+    counter_behind = collections.Counter(behind_data)
+    counter_ahead = collections.Counter(ahead_data)
+
+    keys = set(counter_behind.keys()) | set(counter_ahead.keys())
+
+    # Normalize frequencies to probabilities
+    freq_behind = {k: counter_behind.get(k, 0) / 4096 for k in keys}
+    freq_ahead = {k: counter_ahead.get(k, 0) / 4096 for k in keys}
+
+    # Compute Manhattan distance
+    diff = sum(abs(freq_behind[k] - freq_ahead[k]) for k in keys)
+
+    # Maybe I'll need to make it less strict
+    if abs(zeroes_behid - zeroes_ahead) > 64 and diff > 0.2:
+        offset_candidates.append(field)
+
+# Remove any duplicates and sort
+offset_candidates = list(set(offset_candidates))
 offset_candidates.sort()
 
 # Exclude candidates based on user input.
 if exclude_offset_candidates:
-    for excluded_idx in exclude_offset_candidates.split(','):
-        todelete = offset_candidates[int(excluded_idx)]
+    for excluded in exclude_offset_candidates.split(','):
+        todelete = int(excluded)
         print(f"{Fore.LIGHTCYAN_EX}Excluding offset {todelete}.")
-        del offset_candidates[int(excluded_idx)]
+        offset_candidates.remove(todelete)
 
 print(f"{Fore.CYAN}Found {len(offset_candidates)} potential offsets.")
 
 # Attempt to filter offsets
-offsets_to_sizes: list[tuple[int, int]] = [(0, 256)]
+offsets_to_sizes: list[tuple[int, int]] = []
 only_sizes = list(filter(lambda x: x not in offset_candidates, fields))
 for possible_offset in offset_candidates:
     found = False
@@ -194,7 +230,7 @@ for possible_offset in offset_candidates:
     for field in only_sizes:
         found_field = False
         if field != possible_offset and field != 0 and field < len(metadata) / 3:
-            if -4 <= field + possible_offset - len(metadata) <= 4:
+            if field + possible_offset == len(metadata):
                 print(f"{Fore.CYAN}Hit the last offset {possible_offset} with size {field}, adding it to the list of potential offsets.")
                 offsets_to_sizes.append((possible_offset, field))
                 found = True
@@ -208,7 +244,7 @@ for possible_offset in offset_candidates:
                         break
                 if found_field:
                     break
-                if -4 <= field + possible_offset - next_offset <= 4 and possible_offset != next_offset:
+                if field + possible_offset == next_offset and possible_offset != next_offset:
                     offsets_to_sizes.append((possible_offset, field))
                     print(f"{Fore.CYAN}Offset {possible_offset} + {field} (={possible_offset + field}) is close to offset {next_offset}, adding it to the list of potential offsets.")
                     found = True
@@ -223,15 +259,11 @@ for possible_offset in offset_candidates:
             break
     
     if not found:
-        is_256 = possible_offset == 256
-        try:
-            should_precompute = (
-                is_256 or
-                (possible_offset > len(metadata) / 2 and possible_offset < len(metadata)) or
-                sum(offsets_to_sizes[-1]) == possible_offset - 4
-                )
-        except:
-            break
+        should_precompute = (
+            possible_offset == 256 or
+            (possible_offset > len(metadata) / 2 and possible_offset < len(metadata)) or
+            sum(offsets_to_sizes[-1]) == possible_offset
+            )
         if should_precompute:
             next_offset = None
             try:
@@ -242,17 +274,12 @@ for possible_offset in offset_candidates:
 
                 next_offset = len(metadata) + 4
 
-            size = next_offset - possible_offset - 4
+            size = next_offset - possible_offset
             print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one with {size=}")
             offsets_to_sizes.append((possible_offset, size))
         else:
             only_sizes.append(possible_offset)
             print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, and it's probably a size.")
-
-# A temporary fix beacuse idk
-for offset, size in offsets_to_sizes:
-    if size == 25:
-        offsets_to_sizes.remove((offset, size))
 
 # Sort offsets to sizes by offset
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
@@ -303,15 +330,12 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
             found.append((offset, size, data))
     if len(found) <= 0:
         print(f"{Fore.RED + Style.BRIGHT}Failed to apply heuristic search for {name}")
-        print(f"{Fore.YELLOW + Style.BRIGHT}Saving partially decrypted metadata. {Style.RESET_ALL}")
-        with open("partially-decrypted-metadata.bin", "wb") as f:
-            f.write(reconstructed_metadata)
-        exit(0)
+        exit(1)
     
     found.sort(key=lambda x: x[1], reverse=not prefer_the_lowest_size)
     offsets_to_sizes.remove(found[0][:2])
 
-    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]}. Adding to reconstructed fields.")
+    print(f"{Fore.CYAN}Found {name} at offset {found[0][0]}: Adding to reconstructed fields.")
 
     reconstructed_offsets.append(found[0][0])
 
@@ -507,7 +531,7 @@ def unresolvedIndirectCallParameterTypeRanges_callback(entries):
 
 def exportedTypeDefinitions_callback(entries):
     for entry in entries:
-        if entry < 4096 or entry > 32768:
+        if entry < 64 or entry > 131072:
             return False
     return True
 
