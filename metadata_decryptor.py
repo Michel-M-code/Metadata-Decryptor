@@ -175,7 +175,7 @@ for i in range(0, 256, 4):
 offset_candidates = []
 
 for field in fields:
-    if field < 8192:
+    if field < 8192 or field % 4 != 0:
         if field == 256: # Make an exception for 256
             offset_candidates.append(field)
         continue
@@ -201,10 +201,11 @@ for field in fields:
     freq_ahead = {k: counter_ahead.get(k, 0) / 4096 for k in keys}
 
     # Compute Manhattan distance
-    diff = sum(abs(freq_behind[k] - freq_ahead[k]) for k in keys)
+    dist = sum(abs(freq_behind[k] - freq_ahead[k]) for k in keys)
 
-    # Maybe I'll need to make it less strict
-    if abs(zeroes_behid - zeroes_ahead) > 64 and diff > 0.2:
+    # Some arbitrary expression that I might (will) have to tweak
+    score = abs(zeroes_behid - zeroes_ahead) / 512 + dist
+    if score > 0.75:
         offset_candidates.append(field)
 
 # Remove any duplicates and sort
@@ -216,7 +217,10 @@ if exclude_offset_candidates:
     for excluded in exclude_offset_candidates.split(','):
         todelete = int(excluded)
         print(f"{Fore.LIGHTCYAN_EX}Excluding offset {todelete}.")
-        offset_candidates.remove(todelete)
+        try:
+            offset_candidates.remove(todelete)
+        except ValueError:
+            print(f"{Fore.YELLOW + Style.BRIGHT}Error: Offset {todelete} not found in candidates list.{Style.RESET_ALL}")
 
 print(f"{Fore.CYAN}Found {len(offset_candidates)} potential offsets.")
 
@@ -226,45 +230,36 @@ only_sizes = list(filter(lambda x: x not in offset_candidates, fields))
 for possible_offset in offset_candidates:
     found = False
 
-    # Iterate in hopes of finding a size.
-    for field in only_sizes:
-        found_field = False
-        if field != possible_offset and field != 0 and field < len(metadata) / 3:
-            if field + possible_offset == len(metadata):
-                print(f"{Fore.CYAN}Hit the last offset {possible_offset} with size {field}, adding it to the list of potential offsets.")
-                offsets_to_sizes.append((possible_offset, field))
+    # We make an exception for 256, because it's 100% an offset
+    size_search_pool = only_sizes if possible_offset != 256 else fields
+    # Iterate in hopes of finding a size that matches the current offset
+    for size in size_search_pool:
+        if size != possible_offset and size != 0 and size < len(metadata) / 3:
+            if size + possible_offset == len(metadata):
+                print(f"{Fore.CYAN}Hit the last offset {possible_offset} with {size = }, adding it to "
+                      f"the list of potential offsets.")
+                offsets_to_sizes.append((possible_offset, size))
                 found = True
                 break
-
-            # Iterate again to maybe find a matching offset.
+            
+            # Iterate again to maybe find a matching offset
             for next_offset in offset_candidates:
-                for offset, size in offsets_to_sizes:
-                    if offset == field:
-                        found_field = True
-                        break
-                if found_field:
-                    break
-                if field + possible_offset == next_offset and possible_offset != next_offset:
-                    offsets_to_sizes.append((possible_offset, field))
-                    print(f"{Fore.CYAN}Offset {possible_offset} + {field} (={possible_offset + field}) is close to offset {next_offset}, adding it to the list of potential offsets.")
+                if possible_offset + size == next_offset and possible_offset != next_offset:
+                    offsets_to_sizes.append((possible_offset, size))
+                    print(f"{Fore.CYAN}Offset {possible_offset} + {size} (={possible_offset + size}) is close to offset "
+                          f"{next_offset}, adding it to the list of potential offsets.")
                     found = True
                     break
-            if found:
-                break
-        else:
-            continue
-        if found_field:
-            continue
         if found:
             break
     
     if not found:
-        should_precompute = (
-            possible_offset == 256 or
-            (possible_offset > len(metadata) / 2 and possible_offset < len(metadata)) or
-            sum(offsets_to_sizes[-1]) == possible_offset
-            )
-        if should_precompute:
+        # Should we use this as a potential offset?
+        is_256 = possible_offset == 256
+        is_big_enough = possible_offset > len(metadata) / 3
+        is_size_big_enough = next_offset - possible_offset > 4096
+        did_the_last_pair_add_up_to_this = sum(offsets_to_sizes[-1]) == possible_offset if not is_256 else True
+        if (is_256 or is_big_enough or is_size_big_enough) and did_the_last_pair_add_up_to_this:
             next_offset = None
             try:
                 next_offset = offset_candidates[offset_candidates.index(possible_offset) + 1]
@@ -275,7 +270,7 @@ for possible_offset in offset_candidates:
                 next_offset = len(metadata) + 4
 
             size = next_offset - possible_offset
-            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one with {size=}")
+            print(f"{Fore.YELLOW}Offset {possible_offset} does not have a matching size, but it's most likely one with {size = }")
             offsets_to_sizes.append((possible_offset, size))
         else:
             only_sizes.append(possible_offset)
@@ -284,7 +279,7 @@ for possible_offset in offset_candidates:
 # Sort offsets to sizes by offset
 offsets_to_sizes = sorted(offsets_to_sizes, key=lambda item: item[0])
 
-# If there are more or less than 29 offsets, something is wrong.
+# If there are more or less than 29 offsets, something is wrong
 if len(offsets_to_sizes) == 29:
     print(f"{Fore.GREEN + Style.BRIGHT}Found 29 unique valid offsets in the metadata at: {offsets_to_sizes}.{Style.RESET_ALL}")
 else:
@@ -295,7 +290,7 @@ print(f"{Fore.CYAN}Starting reconstruction using heuristic search...")
 reconstructed_metadata = bytearray(b"\xAF\x1B\xB1\xFA\x1F\0\0\0\0\x01\00\00" + b"\0" * 244)
 reconstructed_offsets = []
 
-# And here's a shitload of heuristics to guess which offset is which field.
+# And here's a shitload of heuristics to guess which offset is which field
 
 # Main heuristic function
 def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_contains):
@@ -325,7 +320,7 @@ def apply_heuristic(name, callback, struct_sig, prefer_the_lowest_size, add_if_c
                 # Removed cuz heuristics will probably throw away incorrect offsets while
                 # some correct ones may get thrown away due to an offset filtering error
                 break
-
+        
         if callback and callback(entries):
             found.append((offset, size, data))
     if len(found) <= 0:
@@ -599,9 +594,11 @@ for i in range(31):
         # Manually fix the last size beacuse implementing a proper fix is unnecessary
         reconstructed_metadata[252:256] = struct.pack("<I", len(metadata) - 
                                         struct.unpack("<I", reconstructed_metadata[248:252])[0])    
-        print(f"{Fore.CYAN}Fixed the last size in the header.")
+        offset = reconstructed_offsets[28]
+        size = len(metadata) - offset
         # Add the data of the last field
         reconstructed_metadata += metadata[offset:offset+size]
+        print(f"{Fore.CYAN}Fixed the last size in the header.")
 
 
 # Write reconstructed_data to output
