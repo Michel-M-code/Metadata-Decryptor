@@ -5,7 +5,12 @@
 A Python script to automatically extract and decrypt global-metadata.dat embedded in `libunity.so`. Made specifically for *Standoff 2*.
 
 > [!IMPORTANT]  
-> I am aware of the situation, please do not open any issues. Expect a fix to come out in ~2 days
+> This project will no longer be updated publicly on GitHub for the foreseeable future.  
+> Reasons include limited personal time and my preference not to publish work that I consider unfinished or suboptimal.
+> 
+> Additionally, the nature of this project makes continued public development impractical.
+> 
+> The project will remain closed source. I will update this section soon with contact information.
 
 ## Features
 
