@@ -10,7 +10,7 @@ A Python script to automatically extract and decrypt global-metadata.dat embedde
 > 
 > Additionally, the nature of this project makes continued public development impractical.
 > 
-> The project will remain closed source. I will update this section soon with contact information.
+> The project will remain closed source. For updates on the project, see https://t.me/michel_m_yaps
 
 ## Features
 
